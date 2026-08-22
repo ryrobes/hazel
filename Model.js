@@ -50,14 +50,29 @@ function emptyState() {
       lastAutovacuum: null,
       lastVacuum: null
     },
+    maintenance: {
+      kind: "vacuum",
+      backlogLabel: "DEAD TUPLES",
+      surfaceLabel: "MVCC SURFACE",
+      backlog: 0,
+      workerCount: 0,
+      autoWorkerCount: 0,
+      dirtyPages: 0,
+      totalPages: 0,
+      bufferWaitFree: 0,
+      lastMaintenance: null
+    },
     replication: {},
-    rates: { transactions: 0, walBytes: 0, rowsModified: 0, rowsReturned: 0 },
+    rates: { work: 0, logBytes: 0, transactions: 0, walBytes: 0, rowsModified: 0, rowsReturned: 0 },
     cacheHitPercent: 0,
     connectionPercent: 0,
     deadTuplePercent: 0,
     peakTransactions: 0,
-    pressures: { workload: 0, contention: 0, connections: 0, mvcc: 0 },
+    pressures: { workload: 0, contention: 0, connections: 0, maintenance: 0, mvcc: 0 },
     histories: {
+      work: [],
+      logBytes: [],
+      maintenanceBacklog: [],
       transactions: [],
       walBytes: [],
       active: [],
@@ -220,6 +235,7 @@ function ingestSummary(previousState, payload, historyPolicy) {
   var connections = safeObject(nextPayload.connections)
   var counters = safeObject(nextPayload.counters)
   var mvcc = safeObject(nextPayload.mvcc)
+  var maintenancePayload = safeObject(nextPayload.maintenance)
   var elapsedSeconds = previous.collectedAtMs > 0 ? (timestamp - previous.collectedAtMs) / 1000 : 0
   var policy = historyPolicy && typeof historyPolicy === "object"
     ? historyPolicy
@@ -234,44 +250,75 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.connections = Object.assign(next.connections, connections)
   next.counters = counters
   next.mvcc = Object.assign(next.mvcc, mvcc)
+  if (next.engine === "mysql") {
+    next.maintenance = Object.assign(next.maintenance, {
+      kind: "purge",
+      backlogLabel: "PURGE DEBT",
+      surfaceLabel: "INNODB SURFACE"
+    }, maintenancePayload)
+  } else {
+    next.maintenance = Object.assign(next.maintenance, {
+      kind: "vacuum",
+      backlogLabel: "DEAD TUPLES",
+      surfaceLabel: "MVCC SURFACE",
+      backlog: finiteNumber(next.mvcc.deadTuples, 0),
+      workerCount: finiteNumber(next.mvcc.vacuumWorkers, 0),
+      autoWorkerCount: finiteNumber(next.mvcc.autovacuumWorkers, 0),
+      lastMaintenance: next.mvcc.lastAutovacuum || next.mvcc.lastVacuum || null
+    }, maintenancePayload)
+  }
   next.replication = safeObject(nextPayload.replication)
   next.activity = safeArray(previous.activity)
   next.relations = safeArray(previous.relations)
   next.blocking = safeArray(previous.blocking)
   next.vacuum = safeArray(previous.vacuum)
 
-  next.rates.transactions = rate(
-    counters, previous.counters, ["xactCommit", "xactRollback"], elapsedSeconds, "databaseStatsReset")
+  var mysql = next.engine === "mysql"
+  next.rates.work = mysql
+    ? rate(counters, previous.counters, ["workTotal"], elapsedSeconds, "statsReset")
+    : rate(counters, previous.counters, ["xactCommit", "xactRollback"], elapsedSeconds, "databaseStatsReset")
   if (elapsedSeconds > 0)
-    next.rates.transactions = Math.max(0, next.rates.transactions - Math.max(0, finiteNumber(nextPayload.collectorTransactions, 0)) / elapsedSeconds)
-  next.rates.rowsModified = rate(
-    counters, previous.counters, ["tuplesInserted", "tuplesUpdated", "tuplesDeleted"], elapsedSeconds, "databaseStatsReset")
-  next.rates.rowsReturned = rate(
-    counters, previous.counters, ["tuplesReturned"], elapsedSeconds, "databaseStatsReset")
-  next.rates.walBytes = rate(
-    counters, previous.counters, ["walBytes"], elapsedSeconds, "walStatsReset")
+    next.rates.work = Math.max(0, next.rates.work - Math.max(0, finiteNumber(nextPayload.collectorTransactions, 0)) / elapsedSeconds)
+  next.rates.transactions = next.rates.work
+  next.rates.rowsModified = mysql
+    ? rate(counters, previous.counters, ["rowsModified"], elapsedSeconds, "statsReset")
+    : rate(counters, previous.counters, ["tuplesInserted", "tuplesUpdated", "tuplesDeleted"], elapsedSeconds, "databaseStatsReset")
+  next.rates.rowsReturned = mysql
+    ? rate(counters, previous.counters, ["rowsReturned"], elapsedSeconds, "statsReset")
+    : rate(counters, previous.counters, ["tuplesReturned"], elapsedSeconds, "databaseStatsReset")
+  next.rates.logBytes = mysql
+    ? rate(counters, previous.counters, ["logBytes"], elapsedSeconds, "logStatsReset")
+    : rate(counters, previous.counters, ["walBytes"], elapsedSeconds, "walStatsReset")
+  next.rates.walBytes = next.rates.logBytes
 
   next.cacheHitPercent = percentage(counters.blocksHit, finiteNumber(counters.blocksHit, 0) + finiteNumber(counters.blocksRead, 0))
   next.connectionPercent = percentage(next.connections.used, next.connections.max)
   next.deadTuplePercent = percentage(next.mvcc.deadTuples, finiteNumber(next.mvcc.liveTuples, 0) + finiteNumber(next.mvcc.deadTuples, 0))
-  next.peakTransactions = Math.max(finiteNumber(previous.peakTransactions, 0), next.rates.transactions)
+  next.peakTransactions = Math.max(finiteNumber(previous.peakTransactions, 0), next.rates.work)
 
   var waitingShare = next.connections.active > 0
     ? next.connections.waiting / next.connections.active
     : (next.connections.waiting > 0 ? 1 : 0)
-  next.pressures.workload = next.peakTransactions > 0 ? clamp(next.rates.transactions / next.peakTransactions, 0, 1) : 0
+  next.pressures.workload = next.peakTransactions > 0 ? clamp(next.rates.work / next.peakTransactions, 0, 1) : 0
   next.pressures.contention = clamp(Math.max(waitingShare, next.connections.blocked * 0.5), 0, 1)
   next.pressures.connections = next.connectionPercent / 100
   next.pressures.mvcc = next.deadTuplePercent / 100
+  next.pressures.maintenance = next.engine === "mysql" ? 0 : next.pressures.mvcc
 
-  next.histories.transactions = appendHistory(previous.histories.transactions, timestamp, next.rates.transactions, policy)
-  next.histories.walBytes = appendHistory(previous.histories.walBytes, timestamp, next.rates.walBytes, policy)
+  var previousWork = previous.histories.work || previous.histories.transactions
+  var previousLog = previous.histories.logBytes || previous.histories.walBytes
+  var previousBacklog = previous.histories.maintenanceBacklog || previous.histories.deadTuples
+  next.histories.work = appendHistory(previousWork, timestamp, next.rates.work, policy)
+  next.histories.logBytes = appendHistory(previousLog, timestamp, next.rates.logBytes, policy)
+  next.histories.maintenanceBacklog = appendHistory(previousBacklog, timestamp, next.maintenance.backlog, policy)
+  next.histories.transactions = next.histories.work
+  next.histories.walBytes = next.histories.logBytes
   next.histories.active = appendHistory(previous.histories.active, timestamp, next.connections.active, policy)
   next.histories.waiting = appendHistory(previous.histories.waiting, timestamp, next.connections.waiting, policy)
   next.histories.lockWaiting = appendHistory(previous.histories.lockWaiting, timestamp, next.connections.lockWaiting, policy)
   next.histories.blocked = appendHistory(previous.histories.blocked, timestamp, next.connections.blocked, policy)
   next.histories.connectionsUsed = appendHistory(previous.histories.connectionsUsed, timestamp, next.connections.used, policy)
-  next.histories.deadTuples = appendHistory(previous.histories.deadTuples, timestamp, next.mvcc.deadTuples, policy)
+  next.histories.deadTuples = next.histories.maintenanceBacklog
   next.histories.autovacuumCount = appendHistory(previous.histories.autovacuumCount, timestamp, next.mvcc.autovacuumCount, policy)
   next.histories.vacuumWorkers = appendHistory(previous.histories.vacuumWorkers, timestamp, next.mvcc.vacuumWorkers, policy)
 
@@ -340,16 +387,17 @@ function barLabel(state, mode, vertical) {
     if (data.connections.blocked > 0) selected = "Waits"
     else if (data.connectionPercent >= 80) selected = "Connections"
     else if (data.connections.waiting > 0) selected = "Activity"
-    else selected = "Transactions"
+    else selected = "Work"
   }
   var value = ""
-  if (selected === "Transactions") value = formatRate(data.rates.transactions, "t/s")
+  var workSuffix = data.engine === "mysql" ? "q/s" : "t/s"
+  if (selected === "Work" || selected === "Transactions") value = formatRate(data.rates.work, workSuffix)
   else if (selected === "Activity") value = data.connections.active + " act"
   else if (selected === "Connections") value = Math.round(data.connectionPercent) + "% conn"
   else if (selected === "Waits") value = data.connections.blocked > 0 ? data.connections.blocked + " block" : data.connections.waiting + " wait"
-  else if (selected === "WAL") value = formatBytes(data.rates.walBytes) + "/s"
-  else if (selected === "MVCC") value = data.deadTuplePercent.toFixed(data.deadTuplePercent >= 10 ? 0 : 1) + "% dead"
-  else value = formatRate(data.rates.transactions, "t/s")
+  else if (selected === "Log" || selected === "WAL") value = formatBytes(data.rates.logBytes) + "/s"
+  else if (selected === "Maintenance" || selected === "MVCC") value = formatRate(data.maintenance.backlog, data.engine === "mysql" ? " undo" : " dead")
+  else value = formatRate(data.rates.work, workSuffix)
   return vertical ? value.replace(/ .*/, "") : value
 }
 
@@ -364,16 +412,22 @@ function fleetSummary(states) {
     blocked: 0,
     used: 0,
     max: 0,
-    transactions: 0,
-    walBytes: 0,
-    deadTuples: 0,
+    work: 0,
+    postgresWork: 0,
+    mysqlWork: 0,
+    logBytes: 0,
+    maintenanceBacklog: 0,
+    postgresMaintenance: 0,
+    mysqlMaintenance: 0,
+    postgresCount: 0,
+    mysqlCount: 0,
     severity: "normal"
   }
   for (var i = 0; i < source.length; i++) {
     var state = safeObject(source[i])
     var connections = safeObject(state.connections)
     var rates = safeObject(state.rates)
-    var mvcc = safeObject(state.mvcc)
+    var maintenance = safeObject(state.maintenance)
     if (state.connected === true) summary.connected++
     else summary.unavailable++
     summary.active += finiteNumber(connections.active, 0)
@@ -381,9 +435,18 @@ function fleetSummary(states) {
     summary.blocked += finiteNumber(connections.blocked, 0)
     summary.used += finiteNumber(connections.used, 0)
     summary.max += finiteNumber(connections.max, 0)
-    summary.transactions += finiteNumber(rates.transactions, 0)
-    summary.walBytes += finiteNumber(rates.walBytes, 0)
-    summary.deadTuples += finiteNumber(mvcc.deadTuples, 0)
+    summary.work += finiteNumber(rates.work, rates.transactions)
+    summary.logBytes += finiteNumber(rates.logBytes, rates.walBytes)
+    summary.maintenanceBacklog += finiteNumber(maintenance.backlog, safeObject(state.mvcc).deadTuples)
+    if (state.engine === "mysql") {
+      summary.mysqlCount++
+      summary.mysqlWork += finiteNumber(rates.work, rates.transactions)
+      summary.mysqlMaintenance += finiteNumber(maintenance.backlog, 0)
+    } else {
+      summary.postgresCount++
+      summary.postgresWork += finiteNumber(rates.work, rates.transactions)
+      summary.postgresMaintenance += finiteNumber(maintenance.backlog, safeObject(state.mvcc).deadTuples)
+    }
     if (state.severity === "critical") summary.severity = "critical"
     else if (state.severity === "warning" && summary.severity === "normal") summary.severity = "warning"
   }
@@ -398,12 +461,24 @@ function fleetBarLabel(states, mode, vertical) {
 
   var fleet = fleetSummary(source)
   var prefix = vertical ? "" : fleet.connected + "/" + fleet.total + " · "
-  if (mode === "Transactions") return prefix + formatRate(fleet.transactions, "/s")
+  if (mode === "Work" || mode === "Transactions") {
+    if (fleet.postgresCount > 0 && fleet.mysqlCount > 0)
+      return prefix + "PG " + formatRate(fleet.postgresWork, "t/s") + " · MY " + formatRate(fleet.mysqlWork, "q/s")
+    return prefix + (fleet.mysqlCount > 0
+      ? formatRate(fleet.mysqlWork, "q/s")
+      : formatRate(fleet.postgresWork, "t/s"))
+  }
   if (mode === "Activity") return prefix + fleet.active + " active"
   if (mode === "Connections") return prefix + fleet.used + "/" + fleet.max
   if (mode === "Waits") return prefix + fleet.waiting + " wait"
-  if (mode === "WAL") return prefix + formatBytes(fleet.walBytes) + "/s"
-  if (mode === "MVCC") return prefix + formatRate(fleet.deadTuples, " dead")
+  if (mode === "Log" || mode === "WAL") return prefix + formatBytes(fleet.logBytes) + "/s"
+  if (mode === "Maintenance" || mode === "MVCC") {
+    if (fleet.postgresCount > 0 && fleet.mysqlCount > 0)
+      return prefix + "PG " + formatRate(fleet.postgresMaintenance, " dead") + " · MY " + formatRate(fleet.mysqlMaintenance, " undo")
+    return prefix + (fleet.mysqlCount > 0
+      ? formatRate(fleet.mysqlMaintenance, " undo")
+      : formatRate(fleet.postgresMaintenance, " dead"))
+  }
   if (fleet.blocked > 0) return prefix + fleet.blocked + " block"
   if (fleet.waiting > 0) return prefix + fleet.waiting + " wait"
   if (fleet.unavailable > 0) return prefix + fleet.unavailable + " down"

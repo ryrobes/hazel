@@ -33,6 +33,49 @@ function summary(at, counters, connections = {}, mvcc = {}) {
   }
 }
 
+function mysqlSummary(at, counters = {}, connections = {}, maintenance = {}) {
+  return {
+    kind: "summary",
+    engine: "mysql",
+    collectedAtMs: at,
+    identity: { database: "hazel", version: "8.4.11", inRecovery: false },
+    capabilities: { fullStats: true, performanceSchema: 1 },
+    connections: Object.assign({
+      used: 4, max: 151, active: 1, idle: 3, idleInTransaction: 0,
+      waiting: 0, lockWaiting: 0, blocked: 0,
+      oldestLockWaitSeconds: 0, oldestXactSeconds: 0,
+      oldestIdleXactSeconds: 0, oldestQuerySeconds: 1
+    }, connections),
+    counters: Object.assign({
+      workTotal: 100, rowsReturned: 1000, rowsModified: 50,
+      blocksRead: 10, blocksHit: 9990, logBytes: 10000,
+      statsReset: "2026-08-22T00:00:00", logStatsReset: "2026-08-22T00:00:00"
+    }, counters),
+    maintenance: Object.assign({
+      kind: "purge", backlogLabel: "PURGE DEBT", surfaceLabel: "INNODB SURFACE",
+      backlog: 7, workerCount: 1, autoWorkerCount: 1
+    }, maintenance),
+    replication: { replicaCount: 0, maxByteLag: 0 }
+  }
+}
+
+test("normalizes MySQL work, redo, and purge debt without PostgreSQL vocabulary", () => {
+  const first = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000), 120)
+  const second = Model.ingestSummary(first, mysqlSummary(6000, {
+    workTotal: 125, rowsReturned: 1100, rowsModified: 65, logBytes: 15120
+  }, {}, { backlog: 19 }), 120)
+  assert.equal(second.engine, "mysql")
+  assert.equal(second.rates.work, 5)
+  assert.equal(second.rates.transactions, 5)
+  assert.equal(second.rates.rowsReturned, 20)
+  assert.equal(second.rates.rowsModified, 3)
+  assert.equal(second.rates.logBytes, 1024)
+  assert.equal(second.maintenance.backlog, 19)
+  assert.equal(second.histories.maintenanceBacklog.at(-1).value, 19)
+  assert.match(Model.barLabel(second, "Work", false), /q\/s/)
+  assert.match(Model.barLabel(second, "Maintenance", false), /undo/)
+})
+
 test("derives rates from consecutive counter snapshots", () => {
   const first = Model.ingestSummary(Model.emptyState(), summary(1000, {}), 120)
   const second = Model.ingestSummary(first, summary(6000, {
@@ -107,6 +150,16 @@ test("fleet toolbar aggregates every enabled collector without hiding failures",
   assert.equal(fleet.max, 150)
   assert.equal(fleet.severity, "critical")
   assert.match(Model.fleetBarLabel([healthy, blocked], "Adaptive", false), /2\/2 · 1 block/)
+})
+
+test("mixed-engine fleet labels keep transaction, query, dead-row, and undo units separate", () => {
+  const postgres = Model.ingestSummary(Model.emptyState(), summary(1000, {}), 120)
+  const mysql = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000), 120)
+  const work = Model.fleetBarLabel([postgres, mysql], "Work", false)
+  const maintenance = Model.fleetBarLabel([postgres, mysql], "Maintenance", false)
+  assert.match(work, /PG .*t\/s · MY .*q\/s/)
+  assert.match(maintenance, /PG .*dead · MY .*undo/)
+  assert.doesNotMatch(work, /ops\/s/)
 })
 
 test("fleet toolbar reports paused and unavailable sets explicitly", () => {
@@ -317,9 +370,31 @@ test("collapsed engine watermark swaps to pg_rvbbit when the extension is presen
   assert.match(watermark, /implicitWidth: 108/)
   assert.match(watermark, /implicitHeight: 81/)
   assert.match(watermark, /pgRvbbit \? "assets\/pg-rvbbit\.svg" : "assets\/postgresql\.svg"/)
+  assert.match(watermark, /engine === "mysql"[\s\S]*?assets\/mysql\.svg/)
   assert.match(watermark, /colorizationColor: root\.accent/)
   assert.match(sql, /FROM pg_extension WHERE extname = 'pg_rvbbit'/)
   assert.match(sql, /'pgRvbbit', identity\.has_pg_rvbbit/)
+})
+
+test("profiles select a real engine adapter while sharing one normalized UI contract", () => {
+  const root = path.join(__dirname, "..")
+  const setup = fs.readFileSync(path.join(root, "ConnectionSetup.qml"), "utf8")
+  const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
+  const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
+  const aperture = fs.readFileSync(path.join(root, "PressureAperture.qml"), "utf8")
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"))
+
+  assert.match(setup, /"engine": engineField\.value/)
+  assert.match(setup, /"value": "mysql", "label": "MySQL 8\+"/)
+  assert.match(controller, /sqlDirectory: engineName === "mysql" \? "mysql" : "postgres"/)
+  assert.match(controller, /function mysqlCommand\(\)/)
+  assert.match(controller, /mariadb.*--skip-column-names.*--unbuffered/)
+  assert.match(controller, /MAX_EXECUTION_TIME=5000/)
+  assert.match(block, /root\.snapshot\.maintenance\.surfaceLabel/)
+  assert.match(block, /root\.snapshot\.engine === "mysql" \? " q\/s" : " tx\/s"/)
+  assert.match(aperture, /maintenanceKind === "purge"/)
+  assert.deepEqual(manifest.barWidget.schema.find((item) => item.key === "toolbarMetric").options,
+    ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"])
 })
 
 test("profile cards keep only the accent rail and mark their database identity", () => {
@@ -394,4 +469,14 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   assert.match(controller, /PGAPPNAME=hazel-monitor/)
   assert.match(summarySql, /application_name IS DISTINCT FROM 'hazel-monitor'/)
   assert.match(details, /application_name IS DISTINCT FROM 'hazel-monitor'/)
+
+  for (const file of ["summary.sql", "details.sql"]) {
+    const mysqlSql = fs.readFileSync(path.join(root, "mysql", file), "utf8")
+    assert.doesNotMatch(mysqlSql, /^\s*(insert|update|delete|replace|create|alter|drop|truncate|grant|revoke|call|do|set)\b/im)
+  }
+  const mysqlDetails = fs.readFileSync(path.join(root, "mysql", "details.sql"), "utf8")
+  assert.match(mysqlDetails, /performance_schema\.processlist/)
+  assert.match(mysqlDetails, /performance_schema\.data_lock_waits/)
+  assert.match(mysqlDetails, /performance_schema\.metadata_locks/)
+  assert.match(mysqlDetails, /REGEXP_REPLACE/)
 })

@@ -9,6 +9,7 @@ Item {
     signal windowRequested(int hours)
     signal windowInteractionStarted()
 
+    property string engine: "postgresql"
     property real transactions: 0
     property int lockWaits: 0
     property int blocked: 0
@@ -25,6 +26,8 @@ Item {
     property var connectionHistory: []
     property var deadTupleHistory: []
     property var autovacuumHistory: []
+    property string maintenanceLabel: "DEAD TUPLES"
+    property string maintenanceKind: "vacuum"
     property int windowHours: 6
     property bool expandedLayout: false
     property color foreground: Color.foreground
@@ -41,7 +44,7 @@ Item {
             return "LOCK WAITS";
         if (key === "connections")
             return "CONNECTIONS";
-        return "DEAD TUPLES";
+        return maintenanceLabel;
     }
 
     function rowKind(key) {
@@ -134,6 +137,16 @@ Item {
         var trend = mvccTrendPerMinute();
         var lastDrop = Model.historyLastDrop(deadTupleHistory);
         var recentDrop = lastDrop.amount > 0 && Date.now() - lastDrop.at <= 10 * 60 * 1000;
+        if (maintenanceKind === "purge") {
+            var purgeText = recentDrop
+                ? "PURGED " + formatCount(lastDrop.amount)
+                : (Math.abs(trend) < 0.5
+                    ? "PURGE STEADY"
+                    : (trend > 0 ? "UNDO +" : "UNDO −") + formatCount(Math.abs(trend)) + "/min");
+            return purgeText + (vacuumWorkers > 0
+                ? " · " + vacuumWorkers + (vacuumWorkers === 1 ? " PURGE THREAD" : " PURGE THREADS")
+                : " · PURGE IDLE");
+        }
         var text = recentDrop
             ? "CLEARED " + formatCount(lastDrop.amount)
             : (Math.abs(trend) < 0.5

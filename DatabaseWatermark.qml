@@ -12,6 +12,8 @@ Item {
     readonly property url markSource: {
         if (engine === "postgresql" || engine === "postgres")
             return Qt.resolvedUrl(pgRvbbit ? "assets/pg-rvbbit.svg" : "assets/postgresql.svg");
+        if (engine === "mysql")
+            return Qt.resolvedUrl("assets/mysql.svg");
         return "";
     }
 

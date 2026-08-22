@@ -69,6 +69,7 @@ Panel {
             "profileName": String(value.profileName || "Postgres"),
             "configured": value.configured === true,
             "enabled": true,
+            "engine": String(value.engine || "postgresql"),
             "host": value.host === undefined ? "127.0.0.1" : String(value.host),
             "port": Number(value.port || 5432),
             "database": String(value.database || "postgres"),
@@ -148,6 +149,7 @@ Panel {
             "profiles": profiles,
             "activeProfileId": profile.id,
             "configured": profiles.length > 0,
+            "engine": profile.engine || "postgresql",
             "profileName": profile.name,
             "host": profile.host,
             "port": profile.port,
@@ -362,6 +364,7 @@ Panel {
         editingProfile = true;
         editingProfileId = "";
         connectionSetup.load({
+            "engine": "postgresql",
             "name": "Postgres",
             "enabled": true,
             "host": "127.0.0.1",

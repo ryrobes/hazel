@@ -25,12 +25,14 @@ Item {
     property bool tunnelReady: false
     property string tunnelErrorText: ""
     readonly property bool connectionConfigured: booleanSetting("configured", false)
+    readonly property string engineName: stringSetting("engine", "postgresql") === "mysql" ? "mysql" : "postgresql"
+    readonly property string sqlDirectory: engineName === "mysql" ? "mysql" : "postgres"
     readonly property string profileId: stringSetting("activeProfileId", "default-postgres")
     readonly property string profileName: stringSetting("profileName", "Postgres")
     readonly property string hostName: stringSetting("host", "127.0.0.1")
-    readonly property int port: boundedSetting("port", 5432, 1, 65535)
-    readonly property string databaseName: stringSetting("database", "postgres")
-    readonly property string userName: stringSetting("user", "postgres")
+    readonly property int port: boundedSetting("port", engineName === "mysql" ? 3306 : 5432, 1, 65535)
+    readonly property string databaseName: stringSetting("database", engineName === "mysql" ? "mysql" : "postgres")
+    readonly property string userName: stringSetting("user", engineName === "mysql" ? "root" : "postgres")
     readonly property string sslMode: stringSetting("sslMode", "prefer")
     readonly property bool rememberPassword: booleanSetting("rememberPassword", true)
     readonly property bool sshEnabled: booleanSetting("sshEnabled", false)
@@ -49,7 +51,7 @@ Item {
         "maxPoints": Math.ceil(historyHours * 60 * 60 * 1000 / historyBucketMs) + 2
     })
     readonly property bool queriesReady: summarySql.trim() !== "" && detailsSql.trim() !== ""
-    readonly property string connectionKey: [profileId, connectionConfigured, hostName, port, databaseName, userName, sslMode, rememberPassword, sshEnabled, sshHost, sshPort, sshUser, sshIdentityFile, sshLocalPort].join("|")
+    readonly property string connectionKey: [profileId, engineName, connectionConfigured, hostName, port, databaseName, userName, sslMode, rememberPassword, sshEnabled, sshHost, sshPort, sshUser, sshIdentityFile, sshLocalPort].join("|")
 
     function stringSetting(name, fallback) {
         var value = settings ? settings[name] : undefined;
@@ -78,7 +80,10 @@ Item {
     }
 
     function secretAttributes() {
-        return ["application", "hazel", "profile", profileId, "host", hostName || "local-socket", "port", String(port), "database", databaseName, "user", userName];
+        var attributes = ["application", "hazel"];
+        if (engineName === "mysql")
+            attributes.push("engine", "mysql");
+        return attributes.concat(["profile", profileId, "host", hostName || "local-socket", "port", String(port), "database", databaseName, "user", userName]);
     }
 
     function beginCredentialLookup() {
@@ -185,6 +190,33 @@ Item {
         return command;
     }
 
+    function mysqlCommand() {
+        var command = ["env"];
+        if (sessionPassword !== "")
+            command.push("MYSQL_PWD=" + sessionPassword);
+        command.push("mariadb", "--batch", "--raw", "--skip-column-names", "--silent", "--unbuffered", "--connect-timeout=3", "--init-command=SET SESSION MAX_EXECUTION_TIME=5000");
+        command.push("--host=" + (sshEnabled ? "127.0.0.1" : hostName));
+        command.push("--port=" + String(sshEnabled ? sshLocalPort : port));
+        command.push("--user=" + userName);
+        if (databaseName !== "")
+            command.push("--database=" + databaseName);
+        if (sslMode === "disable")
+            command.push("--skip-ssl");
+        else if (sslMode === "require")
+            command.push("--ssl");
+        else if (sslMode === "verify-ca" || sslMode === "verify-full")
+            command.push("--ssl", "--ssl-verify-server-cert");
+        return command;
+    }
+
+    function databaseCommand() {
+        return engineName === "mysql" ? mysqlCommand() : psqlCommand();
+    }
+
+    function engineLabel() {
+        return engineName === "mysql" ? "MySQL" : "PostgreSQL";
+    }
+
     function sshCommand() {
         var command = ["ssh", "-N", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=5", "-p", String(sshPort)];
         if (sshIdentityFile !== "")
@@ -196,7 +228,7 @@ Item {
 
     function connectionDescription() {
         var host = hostName !== "" ? hostName : "local socket";
-        var database = databaseName !== "" ? databaseName : "postgres";
+        var database = databaseName !== "" ? databaseName : (engineName === "mysql" ? "mysql" : "postgres");
         var route = database + " · " + host + (hostName !== "" ? ":" + port : "");
         if (sshEnabled)
             route += " · via " + sshUser + "@" + sshHost;
@@ -207,7 +239,7 @@ Item {
         if (!active || !connectionConfigured || !sshEnabled || tunnelProc.running)
             return ;
         if (sshHost === "" || sshUser === "" || hostName === "") {
-            errorText = "SSH profile is missing its host, user, or PostgreSQL target";
+            errorText = "SSH profile is missing its host, user, or " + engineLabel() + " target";
             return ;
         }
         tunnelReady = false;
@@ -227,7 +259,7 @@ Item {
 
         errorText = "";
         processReady = false;
-        psqlProc.command = psqlCommand();
+        psqlProc.command = databaseCommand();
         psqlProc.running = true;
     }
 
@@ -278,7 +310,7 @@ Item {
         try {
             payload = JSON.parse(text);
         } catch (error) {
-            errorText = "PostgreSQL returned an unreadable snapshot";
+            errorText = engineLabel() + " returned an unreadable snapshot";
             return ;
         }
         if (payload.kind === "summary") {
@@ -308,7 +340,7 @@ Item {
         if (text === "")
             return ;
 
-        text = text.replace(/^psql:\s*/i, "");
+        text = text.replace(/^(psql|mariadb|mysql):\s*/i, "");
         errorText = text.length > 180 ? text.slice(0, 177) + "…" : text;
     }
 
@@ -388,21 +420,21 @@ Item {
     }
 
     FileView {
-        path: Qt.resolvedUrl("postgres/summary.sql")
+        path: Qt.resolvedUrl(root.sqlDirectory + "/summary.sql")
         watchChanges: true
         printErrors: false
         onLoaded: root.summarySql = text()
         onFileChanged: reload()
-        onLoadFailed: root.errorText = "Hazel could not load its PostgreSQL summary query"
+        onLoadFailed: root.errorText = "Hazel could not load its " + root.engineLabel() + " summary query"
     }
 
     FileView {
-        path: Qt.resolvedUrl("postgres/details.sql")
+        path: Qt.resolvedUrl(root.sqlDirectory + "/details.sql")
         watchChanges: true
         printErrors: false
         onLoaded: root.detailsSql = text()
         onFileChanged: reload()
-        onLoadFailed: root.errorText = "Hazel could not load its PostgreSQL detail query"
+        onLoadFailed: root.errorText = "Hazel could not load its " + root.engineLabel() + " detail query"
     }
 
     Process {
@@ -425,7 +457,9 @@ Item {
             if (root.active) {
                 root.state = Model.markDisconnected(root.state);
                 if (root.errorText === "")
-                    root.errorText = exitCode === 127 ? "psql is not installed" : "PostgreSQL connection closed";
+                    root.errorText = exitCode === 127
+                        ? (root.engineName === "mysql" ? "mariadb client is not installed" : "psql is not installed")
+                        : root.engineLabel() + " connection closed";
 
                 retryTimer.restart();
             }
@@ -582,7 +616,7 @@ Item {
         interval: 8000
         repeat: false
         onTriggered: {
-            root.errorText = "PostgreSQL snapshot timed out";
+            root.errorText = root.engineLabel() + " snapshot timed out";
             root.pendingKind = "";
             root.processReady = false;
             if (psqlProc.running)

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ryan.hazel",
   "name": "Hazel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Ryan Robitaille",
   "license": "MIT",
   "description": "A quiet, read-only multi-database instrument for the Omarchy bar.",
@@ -12,13 +12,14 @@
   },
   "barWidget": {
     "displayName": "Hazel",
-    "description": "PostgreSQL activity, contention, connections, WAL, and MVCC across every enabled profile.",
+    "description": "PostgreSQL and MySQL activity, contention, connections, log flow, and maintenance pressure across every enabled profile.",
     "category": "System",
-    "aliases": ["postgres", "postgresql", "database", "db-monitor"],
+    "aliases": ["postgres", "postgresql", "mysql", "database", "db-monitor"],
     "allowMultiple": true,
     "defaultSection": "right",
     "defaults": {
       "configured": false,
+      "engine": "postgresql",
       "profileName": "Postgres",
       "host": "127.0.0.1",
       "port": 5432,
@@ -70,7 +71,7 @@
         "key": "toolbarMetric",
         "type": "enum",
         "label": "Toolbar metric",
-        "options": ["Adaptive", "Transactions", "Activity", "Connections", "Waits", "WAL", "MVCC"],
+        "options": ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"],
         "defaultValue": "Adaptive"
       }
     ]

@@ -18,20 +18,39 @@ BorderSurface {
     property string profileId: ""
     property alias focusTarget: profileField
     readonly property bool editingExisting: profileId !== ""
+    readonly property string engineLabel: engineField.value === "mysql" ? "MySQL" : "PostgreSQL"
     readonly property bool valid: profileField.text.trim() !== "" && hostField.text.trim() !== "" && databaseField.text.trim() !== "" && userField.text.trim() !== "" && Number(portField.text) >= 1 && Number(portField.text) <= 65535 && (!sshToggle.checked || (sshHostField.text.trim() !== "" && sshUserField.text.trim() !== "" && Number(sshPortField.text) >= 1 && Number(sshPortField.text) <= 65535))
 
     signal connectRequested(var values, string password, bool remember)
     signal cancelRequested()
 
+    function applyEngine(next) {
+        var previous = engineField.value;
+        engineField.value = next;
+        if (previous === next)
+            return;
+        var oldPort = previous === "mysql" ? 3306 : 5432;
+        var oldDatabase = previous === "mysql" ? "mysql" : "postgres";
+        var oldUser = previous === "mysql" ? "root" : "postgres";
+        if (Number(portField.text) === oldPort)
+            portField.text = next === "mysql" ? "3306" : "5432";
+        if (databaseField.text.trim() === oldDatabase)
+            databaseField.text = next === "mysql" ? "mysql" : "postgres";
+        if (userField.text.trim() === oldUser)
+            userField.text = next === "mysql" ? "root" : "postgres";
+    }
+
     function load(values, remembered) {
         var source = values || {};
         profileId = String(source.id || "");
+        var engine = String(source.engine || "postgresql") === "mysql" ? "mysql" : "postgresql";
+        engineField.value = engine;
         profileField.text = String(source.name || source.profileName || "Postgres");
         toneField.value = String(source.tone || "accent");
         hostField.text = String(source.host === undefined ? "127.0.0.1" : source.host);
-        portField.text = String(source.port || 5432);
-        databaseField.text = String(source.database || "postgres");
-        userField.text = String(source.user || "postgres");
+        portField.text = String(source.port || (engine === "mysql" ? 3306 : 5432));
+        databaseField.text = String(source.database || (engine === "mysql" ? "mysql" : "postgres"));
+        userField.text = String(source.user || (engine === "mysql" ? "root" : "postgres"));
         sslField.value = String(source.sslMode || "prefer");
         passwordField.text = "";
         rememberToggle.checked = source.rememberPassword === undefined ? true : source.rememberPassword === true;
@@ -51,6 +70,7 @@ BorderSurface {
             return ;
         connectRequested({
             "configured": true,
+            "engine": engineField.value,
             "id": profileId,
             "name": profileField.text.trim(),
             "profileName": profileField.text.trim(),
@@ -136,6 +156,16 @@ BorderSurface {
                 foreground: root.foreground
                 onChanged: function(next) { value = next; }
             }
+
+            Dropdown {
+                id: engineField
+                Layout.preferredWidth: Style.space(142)
+                showLabel: false
+                value: "postgresql"
+                options: [{ "value": "postgresql", "label": "PostgreSQL" }, { "value": "mysql", "label": "MySQL 8+" }]
+                foreground: root.foreground
+                onChanged: function(next) { root.applyEngine(next); }
+            }
         }
 
         PanelSeparator {
@@ -147,7 +177,7 @@ BorderSurface {
             Layout.fillWidth: true
 
             Text {
-                text: "POSTGRESQL"
+                text: root.engineLabel.toUpperCase()
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -174,7 +204,7 @@ BorderSurface {
             TextField {
                 id: hostField
                 Layout.fillWidth: true
-                placeholderText: "PostgreSQL host"
+                placeholderText: root.engineLabel + " host"
                 foreground: root.foreground
                 onAccepted: portField.forceActiveFocus()
             }
@@ -256,7 +286,7 @@ BorderSurface {
             id: sshToggle
             Layout.fillWidth: true
             label: "Connect through an SSH gateway"
-            description: "Use this when PostgreSQL is only reachable from another machine."
+            description: "Use this when " + root.engineLabel + " is only reachable from another machine."
             checked: false
             foreground: root.foreground
             accent: root.accent

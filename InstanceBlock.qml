@@ -34,26 +34,27 @@ BorderSurface {
         : (connected ? (expanded ? Style.space(670) : Style.space(320)) : Style.space(150))
 
     function profileName() {
-        return String(profile.name || profile.profileName || "Postgres");
+        return String(profile.name || profile.profileName || (profile.engine === "mysql" ? "MySQL" : "Postgres"));
     }
 
     function databaseName() {
         if (connected && snapshot.identity && snapshot.identity.database)
             return String(snapshot.identity.database);
-        return String(profile.database || "postgres");
+        return String(profile.database || (profile.engine === "mysql" ? "mysql" : "postgres"));
     }
 
     function routeLabel() {
         if (profile.sshEnabled === true)
             return "via " + String(profile.sshUser || "") + "@" + String(profile.sshHost || "");
-        return String(profile.host || "local socket") + (profile.host ? ":" + String(profile.port || 5432) : "");
+        return String(profile.host || "local socket") + (profile.host ? ":" + String(profile.port || (profile.engine === "mysql" ? 3306 : 5432)) : "");
     }
 
     function identityMeta() {
         if (!connected)
-            return errorText || "Connecting to PostgreSQL";
+            return errorText || "Connecting to " + (profile.engine === "mysql" ? "MySQL" : "PostgreSQL");
         var role = snapshot.identity.inRecovery ? "standby" : "primary";
-        return "PG " + String(snapshot.identity.version || "") + " · " + role + " · " + snapshot.statusLabel;
+        var prefix = snapshot.engine === "mysql" ? "MYSQL" : "PG";
+        return prefix + " " + String(snapshot.identity.version || "") + " · " + role + " · " + snapshot.statusLabel;
     }
 
     function topQueryLabel() {
@@ -63,6 +64,10 @@ BorderSurface {
     }
 
     function relationDetail(row) {
+        if (snapshot.engine === "mysql")
+            return Number(row.rowsChanged || 0).toLocaleString() + " changed · "
+                + Number(row.rowsRead || 0).toLocaleString() + " read · "
+                + Number(row.totalWaitMs || 0).toLocaleString() + "ms I/O";
         var ratio = Number(row.deadPercent || 0);
         var text = Number(row.deadTuples || 0).toLocaleString() + " dead · " + ratio.toFixed(ratio >= 10 ? 0 : 1) + "%";
         if (row.lastAutovacuum)
@@ -284,22 +289,25 @@ BorderSurface {
             visible: !root.minimized && root.connected
             Layout.fillWidth: true
             Layout.preferredHeight: Style.space(root.expanded ? 236 : 146)
-            transactions: root.snapshot.rates.transactions
+            engine: root.snapshot.engine
+            transactions: root.snapshot.rates.work
             lockWaits: root.snapshot.connections.lockWaiting
             blocked: root.snapshot.connections.blocked
             oldestLockWaitSeconds: root.snapshot.connections.oldestLockWaitSeconds
             connectionsUsed: root.snapshot.connections.used
             maxConnections: root.snapshot.connections.max
-            deadTuples: root.snapshot.mvcc.deadTuples
-            autovacuumWorkers: root.snapshot.mvcc.autovacuumWorkers
-            vacuumWorkers: root.snapshot.mvcc.vacuumWorkers
+            deadTuples: root.snapshot.maintenance.backlog
+            autovacuumWorkers: root.snapshot.maintenance.autoWorkerCount
+            vacuumWorkers: root.snapshot.maintenance.workerCount
             lastAutovacuum: root.snapshot.mvcc.lastAutovacuum
             lastVacuum: root.snapshot.mvcc.lastVacuum
-            transactionHistory: root.snapshot.histories.transactions
+            transactionHistory: root.snapshot.histories.work
             lockWaitHistory: root.snapshot.histories.lockWaiting
             connectionHistory: root.snapshot.histories.connectionsUsed
-            deadTupleHistory: root.snapshot.histories.deadTuples
+            deadTupleHistory: root.snapshot.histories.maintenanceBacklog
             autovacuumHistory: root.snapshot.histories.autovacuumCount
+            maintenanceLabel: root.snapshot.maintenance.backlogLabel
+            maintenanceKind: root.snapshot.maintenance.kind
             windowHours: root.historyHours
             expandedLayout: root.expanded
             foreground: root.foreground
@@ -371,7 +379,7 @@ BorderSurface {
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     anchors.topMargin: Style.space(root.expanded ? 8 : 15)
-                    history: root.snapshot.histories.transactions
+                    history: root.snapshot.histories.work
                     lineColor: root.accent
                     fillColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.1)
                     gridColor: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.1)
@@ -380,7 +388,7 @@ BorderSurface {
                 Text {
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    text: Model.formatRate(root.snapshot.rates.transactions, " tx/s")
+                    text: Model.formatRate(root.snapshot.rates.work, root.snapshot.engine === "mysql" ? " q/s" : " tx/s")
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -477,7 +485,7 @@ BorderSurface {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
-                    text: "MVCC SURFACE"
+                    text: root.snapshot.maintenance.surfaceLabel
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -486,7 +494,9 @@ BorderSurface {
                 }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: Number(root.snapshot.mvcc.deadTuples || 0).toLocaleString() + " estimated dead tuples"
+                    text: root.snapshot.engine === "mysql"
+                        ? Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " undo records pending purge"
+                        : Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " estimated dead tuples"
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

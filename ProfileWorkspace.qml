@@ -138,6 +138,15 @@ ColumnLayout {
                         }
 
                         Text {
+                            text: String(profileCard.modelData.engine || "postgresql") === "mysql" ? "MYSQL" : "PG"
+                            color: profileCard.tone
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                            font.letterSpacing: 0.8
+                        }
+
+                        Text {
                             text: profileCard.monitored ? "MONITOR" : "PAUSED"
                             color: profileCard.monitored ? profileCard.tone : root.muted
                             font.family: root.fontFamily
@@ -157,7 +166,7 @@ ColumnLayout {
 
                     Text {
                         Layout.fillWidth: true
-                        text: String(profileCard.modelData.database || "postgres") + "  ·  " + String(profileCard.modelData.user || "postgres")
+                        text: String(profileCard.modelData.database || (profileCard.modelData.engine === "mysql" ? "mysql" : "postgres")) + "  ·  " + String(profileCard.modelData.user || (profileCard.modelData.engine === "mysql" ? "root" : "postgres"))
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -168,7 +177,7 @@ ColumnLayout {
                         Layout.fillWidth: true
                         text: profileCard.modelData.sshEnabled === true
                             ? "SSH  " + String(profileCard.modelData.sshUser || "") + "@" + String(profileCard.modelData.sshHost || "")
-                            : String(profileCard.modelData.host || "local socket") + ":" + String(profileCard.modelData.port || 5432)
+                            : String(profileCard.modelData.host || "local socket") + ":" + String(profileCard.modelData.port || (profileCard.modelData.engine === "mysql" ? 3306 : 5432))
                         color: root.muted
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption

@@ -153,6 +153,18 @@ SELECT jsonb_build_object(
     'lastAutovacuum', relation_stats.last_autovacuum,
     'lastVacuum', relation_stats.last_vacuum
   ),
+  'maintenance', jsonb_build_object(
+    'kind', 'vacuum',
+    'backlogLabel', 'DEAD TUPLES',
+    'surfaceLabel', 'MVCC SURFACE',
+    'backlog', relation_stats.dead_tuples,
+    'workerCount', vacuum_progress.workers,
+    'autoWorkerCount', activity.autovacuum_workers,
+    'dirtyPages', 0,
+    'totalPages', 0,
+    'bufferWaitFree', 0,
+    'lastMaintenance', greatest(relation_stats.last_autovacuum, relation_stats.last_vacuum)
+  ),
   'replication', jsonb_build_object(
     'replicaCount', replication.replica_count,
     'maxByteLag', replication.max_byte_lag,
