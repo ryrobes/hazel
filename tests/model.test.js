@@ -322,6 +322,16 @@ test("manifest keeps connection profiles in Hazel and secrets out of settings", 
   assert.ok(!manifest.barWidget.schema.some((item) => /password|secret|token/i.test(item.key)))
 })
 
+test("missing database clients expose exact Omarchy package commands", () => {
+  assert.equal(Model.dependencyInstallCommand("postgresql", "psql is not installed"), "omarchy pkg add postgresql-libs")
+  assert.equal(Model.dependencyInstallCommand("mysql", "mariadb client is not installed"), "omarchy pkg add mariadb-clients")
+  assert.equal(Model.dependencyInstallCommand("mariadb", "mariadb client is not installed"), "omarchy pkg add mariadb-clients")
+  assert.equal(Model.dependencyInstallCommand("percona", "mariadb client is not installed"), "omarchy pkg add mariadb-clients")
+  assert.equal(Model.dependencyInstallCommand("clickhouse", "clickhouse client is not installed"), "omarchy pkg add clickhouse")
+  assert.equal(Model.dependencyInstallCommand("postgresql", "ssh is not installed"), "omarchy pkg add openssh")
+  assert.equal(Model.dependencyInstallCommand("postgresql", "connection refused"), "")
+})
+
 test("publishing surface uses the permanent plugin identity", () => {
   const root = path.join(__dirname, "..")
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8")
@@ -512,6 +522,19 @@ test("profile cards keep only the accent rail and mark their database identity",
   assert.match(glyph, /assets\/database\.svg/)
   assert.match(glyph, /implicitWidth: 11/)
   assert.match(glyph, /colorizationColor: root\.accent/)
+})
+
+test("missing-client cards render a selectable console install command", () => {
+  const root = path.join(__dirname, "..")
+  const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
+  const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
+
+  assert.match(block, /Model\.dependencyInstallCommand\(profile\.engine, errorText\)/)
+  assert.match(block, /text:\s*"\$"/)
+  assert.match(block, /TextEdit\s*\{[\s\S]*?readOnly:\s*true[\s\S]*?selectByMouse:\s*true[\s\S]*?text:\s*root\.installCommand/)
+  assert.match(block, /text:\s*"COPY \/ PASTE"/)
+  assert.match(controller, /if \(exitCode === 127\)\s*root\.errorText = root\.missingClientError\(\)/)
+  assert.match(controller, /root\.errorText = exitCode === 127\s*\? "ssh is not installed"/)
 })
 
 test("bar branding uses native vector Hazel marks without redistributing font software", () => {

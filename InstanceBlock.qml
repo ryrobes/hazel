@@ -29,9 +29,11 @@ BorderSurface {
         ? urgent : (snapshot.severity === "warning" ? warning : accent)
     readonly property var topQuery: connected && snapshot.activity && snapshot.activity.length > 0
         ? snapshot.activity[0] : null
+    readonly property string installCommand: Model.dependencyInstallCommand(profile.engine, errorText)
     property real cardHeight: minimized
         ? Style.space(54)
-        : (connected ? (expanded ? Style.space(670) : Style.space(320)) : Style.space(150))
+        : (connected ? (expanded ? Style.space(670) : Style.space(320))
+            : Style.space(installCommand !== "" ? 184 : 150))
 
     function profileName() {
         return String(profile.name || profile.profileName || Model.engineLabel(profile.engine));
@@ -305,17 +307,83 @@ BorderSurface {
             }
         }
 
-        Text {
+        ColumnLayout {
             visible: !root.minimized && !root.connected
             Layout.fillWidth: true
             Layout.fillHeight: true
-            text: root.errorText !== "" ? root.errorText : "Connecting to " + root.databaseName()
-            color: root.errorText !== "" ? root.urgent : root.muted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
-            verticalAlignment: Text.AlignVCenter
-            textFormat: Text.PlainText
+            spacing: Style.space(9)
+
+            Text {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                text: root.errorText !== "" ? root.errorText : "Connecting to " + root.databaseName()
+                color: root.errorText !== "" ? root.urgent : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                verticalAlignment: Text.AlignVCenter
+                textFormat: Text.PlainText
+            }
+
+            Rectangle {
+                visible: root.installCommand !== ""
+                Layout.fillWidth: true
+                Layout.preferredHeight: Style.space(38)
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.055)
+                radius: Style.cornerRadius
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Style.space(3)
+                    color: root.accent
+                    radius: parent.radius
+                }
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: Style.space(11)
+                    anchors.rightMargin: Style.space(11)
+                    spacing: Style.space(8)
+
+                    Text {
+                        text: "$"
+                        color: root.accent
+                        font.family: "monospace"
+                        font.pixelSize: Style.font.body
+                        font.bold: true
+                    }
+
+                    TextEdit {
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        persistentSelection: true
+                        text: root.installCommand
+                        color: root.foreground
+                        selectionColor: root.accent
+                        selectedTextColor: Color.popups.background
+                        font.family: "monospace"
+                        font.pixelSize: Style.font.body
+                        textFormat: TextEdit.PlainText
+                        verticalAlignment: TextEdit.AlignVCenter
+                        onActiveFocusChanged: {
+                            if (activeFocus)
+                                root.windowControlActive = true;
+                        }
+                    }
+
+                    Text {
+                        text: "COPY / PASTE"
+                        color: root.muted
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        font.letterSpacing: 0.6
+                    }
+                }
+            }
         }
 
         PressureAperture {

@@ -54,6 +54,17 @@ function engineDefaults(engine) {
   return { port: 5432, database: "postgres", user: "postgres" }
 }
 
+function dependencyInstallCommand(engine, errorText) {
+  var error = String(errorText || "").toLowerCase()
+  if (error.indexOf("is not installed") < 0) return ""
+  if (error.indexOf("ssh") >= 0) return "omarchy pkg add openssh"
+
+  var family = engineFamily(engine)
+  if (family === "mysql") return "omarchy pkg add mariadb-clients"
+  if (family === "clickhouse") return "omarchy pkg add clickhouse"
+  return "omarchy pkg add postgresql-libs"
+}
+
 function emptyState() {
   return {
     engine: "postgresql",
@@ -587,6 +598,7 @@ if (typeof module !== "undefined" && module.exports) {
     engineLabel: engineLabel,
     engineShortLabel: engineShortLabel,
     engineDefaults: engineDefaults,
+    dependencyInstallCommand: dependencyInstallCommand,
     emptyState: emptyState,
     ingestSummary: ingestSummary,
     ingestDetails: ingestDetails,

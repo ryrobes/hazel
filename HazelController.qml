@@ -248,6 +248,14 @@ Item {
         return Model.engineLabel(engineName);
     }
 
+    function missingClientError() {
+        if (engineFamily === "mysql")
+            return "mariadb client is not installed";
+        if (engineFamily === "clickhouse")
+            return "clickhouse client is not installed";
+        return "psql is not installed";
+    }
+
     function sshCommand() {
         var command = ["ssh", "-N", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ConnectTimeout=5", "-p", String(sshPort)];
         if (sshIdentityFile !== "")
@@ -535,10 +543,10 @@ Item {
             root.collectorTransactionsSinceSummary = 0;
             if (root.active) {
                 root.state = Model.markDisconnected(root.state);
-                if (root.errorText === "")
-                    root.errorText = exitCode === 127
-                        ? (root.engineFamily === "mysql" ? "mariadb client is not installed" : (root.engineFamily === "clickhouse" ? "clickhouse client is not installed" : "psql is not installed"))
-                        : root.engineLabel() + " connection closed";
+                if (exitCode === 127)
+                    root.errorText = root.missingClientError();
+                else if (root.errorText === "")
+                    root.errorText = root.engineLabel() + " connection closed";
 
                 retryTimer.restart();
             }
@@ -572,7 +580,9 @@ Item {
                 psqlProc.running = false;
             if (root.active && root.sshEnabled) {
                 root.state = Model.markDisconnected(root.state);
-                root.errorText = root.tunnelErrorText !== "" ? root.tunnelErrorText : (exitCode === 127 ? "ssh is not installed" : "SSH tunnel closed");
+                root.errorText = exitCode === 127
+                    ? "ssh is not installed"
+                    : (root.tunnelErrorText !== "" ? root.tunnelErrorText : "SSH tunnel closed");
                 retryTimer.restart();
             }
         }
