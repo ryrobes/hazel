@@ -35,6 +35,64 @@ services:
       - hazel-mysql-data:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
 
+  mariadb:
+    image: mariadb:11.8
+    container_name: hazel-mariadb
+    environment:
+      MARIADB_DATABASE: hazel
+      MARIADB_USER: hazel
+      MARIADB_PASSWORD: hazel-dev-only
+      MARIADB_ROOT_PASSWORD: hazel-root-dev-only
+    ports:
+      - "127.0.0.1:55434:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hazel-mariadb-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+
+  percona:
+    image: percona/percona-server:8.4
+    container_name: hazel-percona
+    environment:
+      MYSQL_DATABASE: hazel
+      MYSQL_USER: hazel
+      MYSQL_PASSWORD: hazel-dev-only
+      MYSQL_ROOT_PASSWORD: hazel-root-dev-only
+    ports:
+      - "127.0.0.1:55435:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hazel-percona-data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    container_name: hazel-clickhouse
+    environment:
+      CLICKHOUSE_DB: hazel
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "127.0.0.1:55436:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - hazel-clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+
 volumes:
   hazel-postgres-data:
   hazel-mysql-data:
+  hazel-mariadb-data:
+  hazel-percona-data:
+  hazel-clickhouse-data:

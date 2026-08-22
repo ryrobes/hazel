@@ -18,6 +18,7 @@ Item {
     property string detailsSql: ""
     property string sessionPassword: ""
     property string pendingSecret: ""
+    property bool oneShotSucceeded: false
     property int collectorTransactionsSinceSummary: 0
     property bool credentialsReady: false
     property bool passwordRemembered: false
@@ -25,14 +26,16 @@ Item {
     property bool tunnelReady: false
     property string tunnelErrorText: ""
     readonly property bool connectionConfigured: booleanSetting("configured", false)
-    readonly property string engineName: stringSetting("engine", "postgresql") === "mysql" ? "mysql" : "postgresql"
-    readonly property string sqlDirectory: engineName === "mysql" ? "mysql" : "postgres"
+    readonly property string engineName: normalizedEngine(stringSetting("engine", "postgresql"))
+    readonly property string engineFamily: Model.engineFamily(engineName)
+    readonly property string sqlDirectory: engineName === "mariadb" ? "mariadb" : (engineFamily === "clickhouse" ? "clickhouse" : (engineFamily === "mysql" ? "mysql" : "postgres"))
+    readonly property var engineDefaults: Model.engineDefaults(engineName)
     readonly property string profileId: stringSetting("activeProfileId", "default-postgres")
     readonly property string profileName: stringSetting("profileName", "Postgres")
     readonly property string hostName: stringSetting("host", "127.0.0.1")
-    readonly property int port: boundedSetting("port", engineName === "mysql" ? 3306 : 5432, 1, 65535)
-    readonly property string databaseName: stringSetting("database", engineName === "mysql" ? "mysql" : "postgres")
-    readonly property string userName: stringSetting("user", engineName === "mysql" ? "root" : "postgres")
+    readonly property int port: boundedSetting("port", engineDefaults.port, 1, 65535)
+    readonly property string databaseName: stringSetting("database", engineDefaults.database)
+    readonly property string userName: stringSetting("user", engineDefaults.user)
     readonly property string sslMode: stringSetting("sslMode", "prefer")
     readonly property bool rememberPassword: booleanSetting("rememberPassword", true)
     readonly property bool sshEnabled: booleanSetting("sshEnabled", false)
@@ -61,6 +64,11 @@ Item {
         return String(value).trim();
     }
 
+    function normalizedEngine(value) {
+        var engine = String(value || "postgresql").toLowerCase();
+        return engine === "mysql" || engine === "mariadb" || engine === "percona" || engine === "clickhouse" ? engine : "postgresql";
+    }
+
     function boundedSetting(name, fallback, minimum, maximum) {
         var value = Number(settings ? settings[name] : undefined);
         if (!isFinite(value))
@@ -81,8 +89,8 @@ Item {
 
     function secretAttributes() {
         var attributes = ["application", "hazel"];
-        if (engineName === "mysql")
-            attributes.push("engine", "mysql");
+        if (engineFamily !== "postgresql")
+            attributes.push("engine", engineName);
         return attributes.concat(["profile", profileId, "host", hostName || "local-socket", "port", String(port), "database", databaseName, "user", userName]);
     }
 
@@ -194,7 +202,10 @@ Item {
         var command = ["env"];
         if (sessionPassword !== "")
             command.push("MYSQL_PWD=" + sessionPassword);
-        command.push("mariadb", "--batch", "--raw", "--skip-column-names", "--silent", "--unbuffered", "--connect-timeout=3", "--init-command=SET SESSION MAX_EXECUTION_TIME=5000");
+        command.push("mariadb", "--batch", "--raw", "--skip-column-names", "--silent", "--unbuffered", "--connect-timeout=3");
+        command.push(engineName === "mariadb"
+            ? "--init-command=SET SESSION max_statement_time=5"
+            : "--init-command=SET SESSION MAX_EXECUTION_TIME=5000");
         command.push("--host=" + (sshEnabled ? "127.0.0.1" : hostName));
         command.push("--port=" + String(sshEnabled ? sshLocalPort : port));
         command.push("--user=" + userName);
@@ -209,12 +220,32 @@ Item {
         return command;
     }
 
+    function clickhouseCommand(sql) {
+        var command = ["env"];
+        if (sessionPassword !== "")
+            command.push("CLICKHOUSE_PASSWORD=" + sessionPassword);
+        command.push("clickhouse", "client", "--format", "JSONEachRow", "--connect_timeout=3", "--receive_timeout=8", "--send_timeout=8", "--max_execution_time=5");
+        command.push("--host=" + (sshEnabled ? "127.0.0.1" : hostName));
+        command.push("--port=" + String(sshEnabled ? sshLocalPort : port));
+        command.push("--user=" + userName);
+        if (databaseName !== "")
+            command.push("--database=" + databaseName);
+        if (sslMode === "require")
+            command.push("--secure", "--accept-invalid-certificate");
+        else if (sslMode === "verify-ca" || sslMode === "verify-full")
+            command.push("--secure");
+        command.push("--query", String(sql || ""));
+        return command;
+    }
+
     function databaseCommand() {
-        return engineName === "mysql" ? mysqlCommand() : psqlCommand();
+        if (engineFamily === "mysql")
+            return mysqlCommand();
+        return psqlCommand();
     }
 
     function engineLabel() {
-        return engineName === "mysql" ? "MySQL" : "PostgreSQL";
+        return Model.engineLabel(engineName);
     }
 
     function sshCommand() {
@@ -228,7 +259,7 @@ Item {
 
     function connectionDescription() {
         var host = hostName !== "" ? hostName : "local socket";
-        var database = databaseName !== "" ? databaseName : (engineName === "mysql" ? "mysql" : "postgres");
+        var database = databaseName !== "" ? databaseName : engineDefaults.database;
         var route = database + " · " + host + (hostName !== "" ? ":" + port : "");
         if (sshEnabled)
             route += " · via " + sshUser + "@" + sshHost;
@@ -259,6 +290,12 @@ Item {
 
         errorText = "";
         processReady = false;
+        if (engineFamily === "clickhouse") {
+            var next = queuedKind || "summary";
+            queuedKind = "";
+            request(next);
+            return;
+        }
         psqlProc.command = databaseCommand();
         psqlProc.running = true;
     }
@@ -266,6 +303,31 @@ Item {
     function request(kind) {
         if (!active || !queriesReady)
             return ;
+
+        if (engineFamily === "clickhouse") {
+            if (!credentialsReady) {
+                queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
+                return;
+            }
+            if (sshEnabled && !tunnelReady) {
+                queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
+                ensureTunnel();
+                return;
+            }
+            if (psqlProc.running || pendingKind !== "") {
+                if (kind === "details" || queuedKind === "")
+                    queuedKind = kind;
+                return;
+            }
+            var clickhouseSql = kind === "details" ? detailsSql : summarySql;
+            pendingKind = kind;
+            oneShotSucceeded = false;
+            errorText = "";
+            queryWatchdog.restart();
+            psqlProc.command = clickhouseCommand(clickhouseSql);
+            psqlProc.running = true;
+            return;
+        }
 
         if (!psqlProc.running || !processReady) {
             queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
@@ -326,6 +388,10 @@ Item {
         }
         pendingKind = "";
         queryWatchdog.stop();
+        if (engineFamily === "clickhouse") {
+            oneShotSucceeded = true;
+            return;
+        }
         var next = queuedKind;
         queuedKind = "";
         if (next !== "")
@@ -340,7 +406,7 @@ Item {
         if (text === "")
             return ;
 
-        text = text.replace(/^(psql|mariadb|mysql):\s*/i, "");
+        text = text.replace(/^(psql|mariadb|mysql|clickhouse(?:-client)?):\s*/i, "");
         errorText = text.length > 180 ? text.slice(0, 177) + "…" : text;
     }
 
@@ -351,6 +417,7 @@ Item {
         queuedKind = "summary";
         processReady = false;
         collectorTransactionsSinceSummary = 0;
+        oneShotSucceeded = false;
         if (psqlProc.running)
             psqlProc.running = false;
         tunnelWarmup.stop();
@@ -379,6 +446,7 @@ Item {
             queuedKind = "";
             processReady = false;
             collectorTransactionsSinceSummary = 0;
+            oneShotSucceeded = false;
             if (psqlProc.running)
                 psqlProc.running = false;
             tunnelWarmup.stop();
@@ -391,6 +459,7 @@ Item {
     onConnectionKeyChanged: {
         if (active) {
             state = Model.emptyState();
+            oneShotSucceeded = false;
             if (psqlProc.running)
                 psqlProc.running = false;
             tunnelWarmup.stop();
@@ -443,6 +512,8 @@ Item {
         stdinEnabled: true
         onStarted: {
             root.processReady = true;
+            if (root.engineFamily === "clickhouse")
+                return;
             var next = root.queuedKind || "summary";
             root.queuedKind = "";
             Qt.callLater(function() {
@@ -452,13 +523,21 @@ Item {
         onExited: function(exitCode, exitStatus) {
             root.processReady = false;
             root.pendingKind = "";
-            root.collectorTransactionsSinceSummary = 0;
             queryWatchdog.stop();
+            if (root.engineFamily === "clickhouse" && root.oneShotSucceeded) {
+                root.oneShotSucceeded = false;
+                var next = root.queuedKind;
+                root.queuedKind = "";
+                if (root.active && next !== "")
+                    Qt.callLater(function() { root.request(next); });
+                return;
+            }
+            root.collectorTransactionsSinceSummary = 0;
             if (root.active) {
                 root.state = Model.markDisconnected(root.state);
                 if (root.errorText === "")
                     root.errorText = exitCode === 127
-                        ? (root.engineName === "mysql" ? "mariadb client is not installed" : "psql is not installed")
+                        ? (root.engineFamily === "mysql" ? "mariadb client is not installed" : (root.engineFamily === "clickhouse" ? "clickhouse client is not installed" : "psql is not installed"))
                         : root.engineLabel() + " connection closed";
 
                 retryTimer.restart();

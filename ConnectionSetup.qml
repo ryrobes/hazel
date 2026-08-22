@@ -1,3 +1,4 @@
+import "Model.js" as Model
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -18,39 +19,60 @@ BorderSurface {
     property string profileId: ""
     property alias focusTarget: profileField
     readonly property bool editingExisting: profileId !== ""
-    readonly property string engineLabel: engineField.value === "mysql" ? "MySQL" : "PostgreSQL"
+    readonly property string engineLabel: engineDisplayName(engineField.value)
     readonly property bool valid: profileField.text.trim() !== "" && hostField.text.trim() !== "" && databaseField.text.trim() !== "" && userField.text.trim() !== "" && Number(portField.text) >= 1 && Number(portField.text) <= 65535 && (!sshToggle.checked || (sshHostField.text.trim() !== "" && sshUserField.text.trim() !== "" && Number(sshPortField.text) >= 1 && Number(sshPortField.text) <= 65535))
 
     signal connectRequested(var values, string password, bool remember)
     signal cancelRequested()
+
+    function engineFamily(engine) {
+        return Model.engineFamily(engine);
+    }
+
+    function engineDisplayName(engine) {
+        var value = String(engine || "postgresql");
+        if (value === "mariadb")
+            return "MariaDB";
+        if (value === "percona")
+            return "Percona";
+        if (value === "clickhouse")
+            return "ClickHouse";
+        return value === "mysql" ? "MySQL" : "PostgreSQL";
+    }
+
+    function engineDefaults(engine) {
+        return Model.engineDefaults(engine);
+    }
 
     function applyEngine(next) {
         var previous = engineField.value;
         engineField.value = next;
         if (previous === next)
             return;
-        var oldPort = previous === "mysql" ? 3306 : 5432;
-        var oldDatabase = previous === "mysql" ? "mysql" : "postgres";
-        var oldUser = previous === "mysql" ? "root" : "postgres";
-        if (Number(portField.text) === oldPort)
-            portField.text = next === "mysql" ? "3306" : "5432";
-        if (databaseField.text.trim() === oldDatabase)
-            databaseField.text = next === "mysql" ? "mysql" : "postgres";
-        if (userField.text.trim() === oldUser)
-            userField.text = next === "mysql" ? "root" : "postgres";
+        var oldDefaults = engineDefaults(previous);
+        var nextDefaults = engineDefaults(next);
+        if (Number(portField.text) === oldDefaults.port)
+            portField.text = String(nextDefaults.port);
+        if (databaseField.text.trim() === oldDefaults.database)
+            databaseField.text = nextDefaults.database;
+        if (userField.text.trim() === oldDefaults.user)
+            userField.text = nextDefaults.user;
     }
 
     function load(values, remembered) {
         var source = values || {};
         profileId = String(source.id || "");
-        var engine = String(source.engine || "postgresql") === "mysql" ? "mysql" : "postgresql";
+        var engine = String(source.engine || "postgresql");
+        if (engine !== "mysql" && engine !== "mariadb" && engine !== "percona" && engine !== "clickhouse")
+            engine = "postgresql";
+        var defaults = engineDefaults(engine);
         engineField.value = engine;
         profileField.text = String(source.name || source.profileName || "Postgres");
         toneField.value = String(source.tone || "accent");
         hostField.text = String(source.host === undefined ? "127.0.0.1" : source.host);
-        portField.text = String(source.port || (engine === "mysql" ? 3306 : 5432));
-        databaseField.text = String(source.database || (engine === "mysql" ? "mysql" : "postgres"));
-        userField.text = String(source.user || (engine === "mysql" ? "root" : "postgres"));
+        portField.text = String(source.port || defaults.port);
+        databaseField.text = String(source.database || defaults.database);
+        userField.text = String(source.user || defaults.user);
         sslField.value = String(source.sslMode || "prefer");
         passwordField.text = "";
         rememberToggle.checked = source.rememberPassword === undefined ? true : source.rememberPassword === true;
@@ -159,10 +181,10 @@ BorderSurface {
 
             Dropdown {
                 id: engineField
-                Layout.preferredWidth: Style.space(142)
+                Layout.preferredWidth: Style.space(164)
                 showLabel: false
                 value: "postgresql"
-                options: [{ "value": "postgresql", "label": "PostgreSQL" }, { "value": "mysql", "label": "MySQL 8+" }]
+                options: [{ "value": "postgresql", "label": "PostgreSQL" }, { "value": "mysql", "label": "MySQL 8+" }, { "value": "mariadb", "label": "MariaDB" }, { "value": "percona", "label": "Percona 8+" }, { "value": "clickhouse", "label": "ClickHouse" }]
                 foreground: root.foreground
                 onChanged: function(next) { root.applyEngine(next); }
             }

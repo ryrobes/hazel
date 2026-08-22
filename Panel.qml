@@ -8,11 +8,6 @@ import qs.Ui
 Panel {
     id: root
 
-    FontLoader {
-        id: outrunFuture
-        source: Qt.resolvedUrl("assets/fonts/Outrun-future-Bold.otf")
-    }
-
     property var anchorItem: null
     property var hostWidget: null
     property string expandedProfileId: ""
@@ -63,17 +58,19 @@ Panel {
 
     function legacyProfile() {
         var value = root.settings || {};
+        var engine = String(value.engine || "postgresql");
+        var defaults = Model.engineDefaults(engine);
         return {
             "id": String(value.activeProfileId || "default-postgres"),
             "name": String(value.profileName || "Postgres"),
             "profileName": String(value.profileName || "Postgres"),
             "configured": value.configured === true,
             "enabled": true,
-            "engine": String(value.engine || "postgresql"),
+            "engine": engine,
             "host": value.host === undefined ? "127.0.0.1" : String(value.host),
-            "port": Number(value.port || 5432),
-            "database": String(value.database || "postgres"),
-            "user": String(value.user || "postgres"),
+            "port": Number(value.port || defaults.port),
+            "database": String(value.database || defaults.database),
+            "user": String(value.user || defaults.user),
             "sslMode": String(value.sslMode || "prefer"),
             "rememberPassword": value.rememberPassword === undefined ? true : value.rememberPassword === true,
             "tone": String(value.tone || "accent"),
@@ -484,6 +481,9 @@ Panel {
         var lockWaiting = 0;
         var unavailable = 0;
         var oldestLockSeconds = 0;
+        var failedMutations = 0;
+        var pendingMutations = 0;
+        var memoryPercent = 0;
         for (var i = 0; i < states.length; i++) {
             var state = states[i] || {};
             var connections = state.connections || {};
@@ -492,14 +492,23 @@ Panel {
             blocked += Number(connections.blocked || 0);
             lockWaiting += Number(connections.lockWaiting || 0);
             oldestLockSeconds = Math.max(oldestLockSeconds, Number(connections.oldestLockWaitSeconds || 0));
+            failedMutations += Number((state.maintenance || {}).failedMutations || 0);
+            pendingMutations += Number((state.maintenance || {}).pendingMutations || 0);
+            memoryPercent = Math.max(memoryPercent, Number(state.capacityPercent || 0));
         }
         var age = oldestLockSeconds > 0 ? " · " + Model.formatDuration(oldestLockSeconds) : "";
         if (blocked > 0)
             return { "label": blocked + " BLOCKED" + age, "tone": urgent };
+        if (failedMutations > 0)
+            return { "label": failedMutations + (failedMutations === 1 ? " MUTATION FAILED" : " MUTATIONS FAILED"), "tone": urgent };
+        if (memoryPercent >= 95)
+            return { "label": "MEMORY " + Math.round(memoryPercent) + "%", "tone": urgent };
         if (unavailable > 0)
             return { "label": unavailable + (unavailable === 1 ? " PROFILE DOWN" : " PROFILES DOWN"), "tone": urgent };
         if (lockWaiting > 0)
             return { "label": lockWaiting + (lockWaiting === 1 ? " LOCK WAIT" : " LOCK WAITS") + age, "tone": warning };
+        if (pendingMutations > 0)
+            return { "label": pendingMutations + (pendingMutations === 1 ? " MUTATION PENDING" : " MUTATIONS PENDING"), "tone": warning };
         return { "label": "", "tone": accent };
     }
 
@@ -517,7 +526,7 @@ Panel {
         return false;
     }
 
-    moduleName: "ryan.hazel"
+    moduleName: "ryrobes.hazel"
     manageIpc: false
 
     onSettingsChanged: collectorSyncTimer.restart()
@@ -672,15 +681,14 @@ Panel {
                             Layout.fillWidth: true
                             spacing: 1
 
-                            Text {
-                                Layout.fillWidth: true
-                                text: "HAZEL"
-                                color: root.foreground
-                                font.family: outrunFuture.status === FontLoader.Ready ? outrunFuture.name : root.fontFamily
-                                font.pixelSize: Style.font.title + Style.space(4)
-                                font.bold: false
-                                font.letterSpacing: 0.5
-                                elide: Text.ElideRight
+                            HazelWordmark {
+                                readonly property real titleHeight: Style.font.title + Style.space(4)
+
+                                Layout.preferredWidth: titleHeight * designWidth / designHeight
+                                Layout.preferredHeight: titleHeight
+                                Layout.maximumWidth: Layout.preferredWidth
+                                Layout.maximumHeight: titleHeight
+                                tint: root.foreground
                             }
 
                             Text {

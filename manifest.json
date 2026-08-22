@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "ryan.hazel",
+  "id": "ryrobes.hazel",
   "name": "Hazel",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "author": "Ryan Robitaille",
   "license": "MIT",
   "description": "A quiet, read-only multi-database instrument for the Omarchy bar.",
@@ -12,9 +12,9 @@
   },
   "barWidget": {
     "displayName": "Hazel",
-    "description": "PostgreSQL and MySQL activity, contention, connections, log flow, and maintenance pressure across every enabled profile.",
+    "description": "PostgreSQL, MySQL, MariaDB, Percona, and ClickHouse activity, pressure, log flow, and engine-native maintenance across every enabled profile.",
     "category": "System",
-    "aliases": ["postgres", "postgresql", "mysql", "database", "db-monitor"],
+    "aliases": ["postgres", "postgresql", "mysql", "mariadb", "percona", "clickhouse", "database", "db-monitor"],
     "allowMultiple": true,
     "defaultSection": "right",
     "defaults": {

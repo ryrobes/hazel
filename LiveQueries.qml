@@ -36,6 +36,8 @@ BorderSurface {
         var age = Model.formatDuration(Number(row.querySeconds || 0));
         if (row.waitEvent)
             return app + " · " + age + " · " + row.waitEvent;
+        if (Number(row.memoryBytes || 0) > 0)
+            return app + " · " + age + " · " + Model.formatBytes(row.memoryBytes);
 
         return app + " · " + age + " · PID " + row.pid;
     }

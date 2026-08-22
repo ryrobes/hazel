@@ -1,3 +1,4 @@
+import "Model.js" as Model
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -27,6 +28,10 @@ ColumnLayout {
         if (tone === "neutral")
             return foreground;
         return accent;
+    }
+
+    function defaultsFor(profile) {
+        return Model.engineDefaults(profile ? profile.engine : "postgresql");
     }
 
     Layout.fillWidth: true
@@ -138,7 +143,7 @@ ColumnLayout {
                         }
 
                         Text {
-                            text: String(profileCard.modelData.engine || "postgresql") === "mysql" ? "MYSQL" : "PG"
+                            text: Model.engineShortLabel(profileCard.modelData.engine)
                             color: profileCard.tone
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
@@ -166,7 +171,7 @@ ColumnLayout {
 
                     Text {
                         Layout.fillWidth: true
-                        text: String(profileCard.modelData.database || (profileCard.modelData.engine === "mysql" ? "mysql" : "postgres")) + "  ·  " + String(profileCard.modelData.user || (profileCard.modelData.engine === "mysql" ? "root" : "postgres"))
+                        text: String(profileCard.modelData.database || root.defaultsFor(profileCard.modelData).database) + "  ·  " + String(profileCard.modelData.user || root.defaultsFor(profileCard.modelData).user)
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -177,7 +182,7 @@ ColumnLayout {
                         Layout.fillWidth: true
                         text: profileCard.modelData.sshEnabled === true
                             ? "SSH  " + String(profileCard.modelData.sshUser || "") + "@" + String(profileCard.modelData.sshHost || "")
-                            : String(profileCard.modelData.host || "local socket") + ":" + String(profileCard.modelData.port || (profileCard.modelData.engine === "mysql" ? 3306 : 5432))
+                            : String(profileCard.modelData.host || "local socket") + ":" + String(profileCard.modelData.port || root.defaultsFor(profileCard.modelData).port)
                         color: root.muted
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption

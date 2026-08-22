@@ -34,26 +34,26 @@ BorderSurface {
         : (connected ? (expanded ? Style.space(670) : Style.space(320)) : Style.space(150))
 
     function profileName() {
-        return String(profile.name || profile.profileName || (profile.engine === "mysql" ? "MySQL" : "Postgres"));
+        return String(profile.name || profile.profileName || Model.engineLabel(profile.engine));
     }
 
     function databaseName() {
         if (connected && snapshot.identity && snapshot.identity.database)
             return String(snapshot.identity.database);
-        return String(profile.database || (profile.engine === "mysql" ? "mysql" : "postgres"));
+        return String(profile.database || Model.engineDefaults(profile.engine).database);
     }
 
     function routeLabel() {
         if (profile.sshEnabled === true)
             return "via " + String(profile.sshUser || "") + "@" + String(profile.sshHost || "");
-        return String(profile.host || "local socket") + (profile.host ? ":" + String(profile.port || (profile.engine === "mysql" ? 3306 : 5432)) : "");
+        return String(profile.host || "local socket") + (profile.host ? ":" + String(profile.port || Model.engineDefaults(profile.engine).port) : "");
     }
 
     function identityMeta() {
         if (!connected)
-            return errorText || "Connecting to " + (profile.engine === "mysql" ? "MySQL" : "PostgreSQL");
-        var role = snapshot.identity.inRecovery ? "standby" : "primary";
-        var prefix = snapshot.engine === "mysql" ? "MYSQL" : "PG";
+            return errorText || "Connecting to " + Model.engineLabel(profile.engine);
+        var role = Model.isClickHouse(snapshot.engine) ? "server" : (snapshot.identity.inRecovery ? "standby" : "primary");
+        var prefix = Model.engineShortLabel(snapshot.engine);
         return prefix + " " + String(snapshot.identity.version || "") + " · " + role + " · " + snapshot.statusLabel;
     }
 
@@ -64,7 +64,13 @@ BorderSurface {
     }
 
     function relationDetail(row) {
-        if (snapshot.engine === "mysql")
+        if (row.limited === true || row.limited === 1)
+            return "~" + Number(row.estimatedRows || 0).toLocaleString() + " rows · I/O telemetry unavailable";
+        if (Model.isClickHouse(snapshot.engine))
+            return Number(row.parts || 0).toLocaleString() + " parts · "
+                + Number(row.rows || 0).toLocaleString() + " rows · "
+                + Model.formatBytes(row.bytes || 0);
+        if (Model.isMysqlFamily(snapshot.engine))
             return Number(row.rowsChanged || 0).toLocaleString() + " changed · "
                 + Number(row.rowsRead || 0).toLocaleString() + " read · "
                 + Number(row.totalWaitMs || 0).toLocaleString() + "ms I/O";
@@ -76,6 +82,15 @@ BorderSurface {
     }
 
     function statValue(label) {
+        if (Model.isClickHouse(snapshot.engine)) {
+            if (label === "RUN")
+                return snapshot.connections.active;
+            if (label === "MERGE")
+                return snapshot.maintenance.activeMerges || 0;
+            if (label === "MUTATE")
+                return snapshot.maintenance.pendingMutations || 0;
+            return Math.round(snapshot.capacityPercent || 0) + "%";
+        }
         if (label === "ACTIVE")
             return snapshot.connections.active;
         if (label === "WAIT")
@@ -86,6 +101,13 @@ BorderSurface {
     }
 
     function statTone(label) {
+        if (Model.isClickHouse(snapshot.engine)) {
+            if (label === "MUTATE")
+                return Number(snapshot.maintenance.failedMutations || 0) > 0 ? urgent : warning;
+            if (label === "MEM")
+                return Number(snapshot.capacityPercent || 0) >= 95 ? urgent : (Number(snapshot.capacityPercent || 0) >= 80 ? warning : foreground);
+            return accent;
+        }
         if (label === "ACTIVE")
             return accent;
         if (label === "WAIT")
@@ -96,14 +118,25 @@ BorderSurface {
     }
 
     function statHot(label) {
+        if (Model.isClickHouse(snapshot.engine) && label === "MEM")
+            return Number(snapshot.capacityPercent || 0) >= 80;
         if (label === "CONN")
             return Number(snapshot.connections.used || 0) > 0;
         return Number(statValue(label) || 0) > 0;
     }
 
+    function statLabels() {
+        return Model.isClickHouse(snapshot.engine) ? ["RUN", "MERGE", "MUTATE", "MEM"] : ["ACTIVE", "WAIT", "BLOCK", "CONN"];
+    }
+
     function focusSummary() {
         if (!connected)
             return "OFFLINE  ·  FOCUS ↗";
+        if (Model.isClickHouse(snapshot.engine))
+            return "Q " + snapshot.connections.active
+                + "  ·  M " + Number(snapshot.maintenance.activeMerges || 0)
+                + "  ·  μ " + Number(snapshot.maintenance.pendingMutations || 0)
+                + "  ·  FOCUS ↗";
         return "A " + snapshot.connections.active
             + "  ·  W " + snapshot.connections.waiting
             + "  ·  B " + snapshot.connections.blocked
@@ -299,6 +332,12 @@ BorderSurface {
             deadTuples: root.snapshot.maintenance.backlog
             autovacuumWorkers: root.snapshot.maintenance.autoWorkerCount
             vacuumWorkers: root.snapshot.maintenance.workerCount
+            runningQueries: root.snapshot.connections.active
+            activeMerges: root.snapshot.maintenance.activeMerges || 0
+            pendingMutations: root.snapshot.maintenance.pendingMutations || 0
+            activeParts: root.snapshot.maintenance.activeParts || 0
+            capacityUsed: root.snapshot.capacity.memoryUsed || 0
+            capacityMax: root.snapshot.capacity.memoryMax || 0
             lastAutovacuum: root.snapshot.mvcc.lastAutovacuum
             lastVacuum: root.snapshot.mvcc.lastVacuum
             transactionHistory: root.snapshot.histories.work
@@ -306,6 +345,8 @@ BorderSurface {
             connectionHistory: root.snapshot.histories.connectionsUsed
             deadTupleHistory: root.snapshot.histories.maintenanceBacklog
             autovacuumHistory: root.snapshot.histories.autovacuumCount
+            runningHistory: root.snapshot.histories.active
+            capacityHistory: root.snapshot.histories.capacityUsed
             maintenanceLabel: root.snapshot.maintenance.backlogLabel
             maintenanceKind: root.snapshot.maintenance.kind
             windowHours: root.historyHours
@@ -329,7 +370,7 @@ BorderSurface {
             spacing: Style.space(5)
 
             Repeater {
-                model: ["ACTIVE", "WAIT", "BLOCK", "CONN"]
+                model: root.statLabels()
 
                 delegate: Rectangle {
                     required property string modelData
@@ -388,7 +429,7 @@ BorderSurface {
                 Text {
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    text: Model.formatRate(root.snapshot.rates.work, root.snapshot.engine === "mysql" ? " q/s" : " tx/s")
+                    text: Model.formatRate(root.snapshot.rates.work, (Model.isMysqlFamily(root.snapshot.engine) || Model.isClickHouse(root.snapshot.engine)) ? " q/s" : " tx/s")
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -428,8 +469,10 @@ BorderSurface {
                 spacing: 1
 
                 Text {
-                    text: "LOCK FLOW"
-                    color: root.snapshot.connections.blocked > 0 ? root.urgent : root.muted
+                    text: Model.isClickHouse(root.snapshot.engine) ? "BACKGROUND" : "LOCK FLOW"
+                    color: Model.isClickHouse(root.snapshot.engine)
+                        ? (root.snapshot.background.length > 0 ? root.accent : root.muted)
+                        : (root.snapshot.connections.blocked > 0 ? root.urgent : root.muted)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
@@ -437,10 +480,13 @@ BorderSurface {
                 }
 
                 Text {
-                    text: root.snapshot.connections.blocked > 0
-                        ? root.snapshot.connections.blocked + " blocked"
-                        : (root.snapshot.connections.lockWaiting > 0 ? root.snapshot.connections.lockWaiting + " waiting" : "clear")
-                    color: root.snapshot.connections.blocked > 0 ? root.urgent : root.muted
+                    text: Model.isClickHouse(root.snapshot.engine)
+                        ? (root.snapshot.background.length > 0 ? root.snapshot.background.length + " jobs" : "clear")
+                        : (root.snapshot.connections.blocked > 0
+                            ? root.snapshot.connections.blocked + " blocked"
+                            : (root.snapshot.connections.lockWaiting > 0 ? root.snapshot.connections.lockWaiting + " waiting" : "clear"))
+                    color: Model.isClickHouse(root.snapshot.engine) && root.snapshot.background.length > 0
+                        ? root.accent : (root.snapshot.connections.blocked > 0 ? root.urgent : root.muted)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                 }
@@ -466,12 +512,26 @@ BorderSurface {
             }
 
             LockFlow {
+                visible: !Model.isClickHouse(root.snapshot.engine)
                 Layout.preferredWidth: Style.space(230)
                 Layout.fillHeight: true
                 edges: root.snapshot.blocking
                 foreground: root.foreground
                 accent: root.accent
                 urgent: root.urgent
+                muted: root.muted
+                fontFamily: root.fontFamily
+            }
+
+            BackgroundWork {
+                visible: Model.isClickHouse(root.snapshot.engine)
+                Layout.preferredWidth: Style.space(230)
+                Layout.fillHeight: true
+                jobs: root.snapshot.background
+                foreground: root.foreground
+                accent: root.accent
+                urgent: root.urgent
+                warning: root.warning
                 muted: root.muted
                 fontFamily: root.fontFamily
             }
@@ -494,9 +554,13 @@ BorderSurface {
                 }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: root.snapshot.engine === "mysql"
-                        ? Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " undo records pending purge"
-                        : Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " estimated dead tuples"
+                    text: Model.isClickHouse(root.snapshot.engine)
+                        ? Number(root.snapshot.maintenance.activeMerges || 0) + " merging · "
+                            + Number(root.snapshot.maintenance.pendingMutations || 0) + " mutations · "
+                            + Number(root.snapshot.maintenance.activeParts || 0).toLocaleString() + " active parts"
+                        : (Model.isMysqlFamily(root.snapshot.engine)
+                            ? Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " undo records pending purge"
+                            : Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " estimated dead tuples")
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

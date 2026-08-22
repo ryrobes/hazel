@@ -19,6 +19,12 @@ Item {
     property real deadTuples: 0
     property int autovacuumWorkers: 0
     property int vacuumWorkers: 0
+    property int runningQueries: 0
+    property int activeMerges: 0
+    property int pendingMutations: 0
+    property int activeParts: 0
+    property real capacityUsed: 0
+    property real capacityMax: 0
     property var lastAutovacuum: null
     property var lastVacuum: null
     property var transactionHistory: []
@@ -26,6 +32,8 @@ Item {
     property var connectionHistory: []
     property var deadTupleHistory: []
     property var autovacuumHistory: []
+    property var runningHistory: []
+    property var capacityHistory: []
     property string maintenanceLabel: "DEAD TUPLES"
     property string maintenanceKind: "vacuum"
     property int windowHours: 6
@@ -37,6 +45,10 @@ Item {
     property color warning: Qt.tint(accent, Qt.rgba(urgent.r, urgent.g, urgent.b, 0.52))
     property string fontFamily: Style.font.family
 
+    function rowKeys() {
+        return Model.isClickHouse(engine) ? ["flow", "running", "memory", "maintenance"] : ["flow", "locks", "connections", "deadTuples"];
+    }
+
     function rowLabel(key) {
         if (key === "flow")
             return "FLOW";
@@ -44,6 +56,12 @@ Item {
             return "LOCK WAITS";
         if (key === "connections")
             return "CONNECTIONS";
+        if (key === "running")
+            return "RUNNING";
+        if (key === "memory")
+            return "MEMORY";
+        if (key === "maintenance")
+            return "MERGE DEBT";
         return maintenanceLabel;
     }
 
@@ -52,6 +70,8 @@ Item {
             return "rate";
         if (key === "connections")
             return "connections";
+        if (key === "memory")
+            return "bytes";
         return "count";
     }
 
@@ -62,6 +82,12 @@ Item {
             return lockWaits;
         if (key === "connections")
             return connectionsUsed;
+        if (key === "running")
+            return runningQueries;
+        if (key === "memory")
+            return capacityUsed;
+        if (key === "maintenance")
+            return deadTuples;
         return deadTuples;
     }
 
@@ -72,6 +98,10 @@ Item {
             return lockWaitHistory;
         if (key === "connections")
             return connectionHistory;
+        if (key === "running")
+            return runningHistory;
+        if (key === "memory")
+            return capacityHistory;
         return deadTupleHistory;
     }
 
@@ -101,13 +131,17 @@ Item {
     function formatValue(value, kind) {
         if (kind === "rate")
             return Model.formatRate(value, "/s");
+        if (kind === "bytes")
+            return Model.formatBytes(value);
         return formatCount(value);
     }
 
     function currentText(key) {
-        return key === "connections"
-            ? formatCount(rowCurrent(key)) + "/" + formatCount(maxConnections)
-            : formatValue(rowCurrent(key), rowKind(key));
+        if (key === "connections")
+            return formatCount(rowCurrent(key)) + "/" + formatCount(maxConnections);
+        if (key === "memory")
+            return formatValue(rowCurrent(key), rowKind(key));
+        return formatValue(rowCurrent(key), rowKind(key));
     }
 
     function observedText() {
@@ -119,6 +153,8 @@ Item {
     }
 
     function lockContext() {
+        if (Model.isClickHouse(engine))
+            return runningQueries + (runningQueries === 1 ? " QUERY RUNNING" : " QUERIES RUNNING");
         if (lockWaits <= 0)
             return "LOCKS CLEAR";
         var text = lockWaits + (lockWaits === 1 ? " LOCK WAIT" : " LOCK WAITS");
@@ -134,6 +170,10 @@ Item {
     }
 
     function vacuumContext() {
+        if (Model.isClickHouse(engine))
+            return activeMerges + (activeMerges === 1 ? " MERGE" : " MERGES")
+                + " · " + pendingMutations + (pendingMutations === 1 ? " MUTATION" : " MUTATIONS")
+                + " · " + formatCount(activeParts) + " PARTS";
         var trend = mvccTrendPerMinute();
         var lastDrop = Model.historyLastDrop(deadTupleHistory);
         var recentDrop = lastDrop.amount > 0 && Date.now() - lastDrop.at <= 10 * 60 * 1000;
@@ -173,6 +213,12 @@ Item {
             var ratio = maxConnections > 0 ? current / maxConnections : 0;
             return ratio >= 0.95 ? urgent : (ratio >= 0.8 ? warning : accent);
         }
+        if (key === "memory") {
+            var capacityRatio = capacityMax > 0 ? current / capacityMax : 0;
+            return capacityRatio >= 0.95 ? urgent : (capacityRatio >= 0.8 ? warning : accent);
+        }
+        if (key === "maintenance")
+            return pendingMutations > 0 ? warning : accent;
         if (key === "deadTuples") {
             var trend = mvccTrendPerMinute();
             if (stats.count >= 12 && stats.p90 > 0 && current > stats.p90 * 1.5)
@@ -268,7 +314,7 @@ Item {
         }
 
         Repeater {
-            model: ["flow", "locks", "connections", "deadTuples"]
+            model: root.rowKeys()
 
             delegate: Item {
                 id: behaviorRow
@@ -376,7 +422,7 @@ Item {
                             ctx.clearRect(0, 0, width, height);
                             var history = root.historyFor(behaviorRow.key);
                             var stats = behaviorRow.stats;
-                            var zoomed = behaviorRow.key === "connections" || behaviorRow.key === "deadTuples";
+                            var zoomed = behaviorRow.key === "connections" || behaviorRow.key === "deadTuples" || behaviorRow.key === "running" || behaviorRow.key === "memory" || behaviorRow.key === "maintenance";
                             var span = Math.max(0, stats.high - stats.low);
                             var pad = zoomed ? Math.max(1, span * 0.12, stats.high * 0.005) : 0;
                             var axisLow = zoomed ? Math.max(0, stats.low - pad) : 0;
@@ -469,6 +515,8 @@ Item {
                             function onLockWaitHistoryChanged() { distribution.requestPaint(); }
                             function onConnectionHistoryChanged() { distribution.requestPaint(); }
                             function onDeadTupleHistoryChanged() { distribution.requestPaint(); }
+                            function onRunningHistoryChanged() { distribution.requestPaint(); }
+                            function onCapacityHistoryChanged() { distribution.requestPaint(); }
                         }
                     }
                 }
@@ -483,7 +531,7 @@ Item {
             Text {
                 Layout.minimumWidth: 0
                 text: root.lockContext()
-                color: root.blocked > 0 ? root.urgent : (root.lockWaits > 0 ? root.warning : root.muted)
+                color: Model.isClickHouse(root.engine) ? (root.runningQueries > 0 ? root.accent : root.muted) : (root.blocked > 0 ? root.urgent : (root.lockWaits > 0 ? root.warning : root.muted))
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -508,7 +556,7 @@ Item {
             Text {
                 Layout.minimumWidth: 0
                 text: root.vacuumContext()
-                color: root.mvccTrendPerMinute() > 0.5 ? root.warning : root.muted
+                color: Model.isClickHouse(root.engine) ? (root.pendingMutations > 0 ? root.warning : root.muted) : (root.mvccTrendPerMinute() > 0.5 ? root.warning : root.muted)
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true

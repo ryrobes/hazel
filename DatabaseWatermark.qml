@@ -14,6 +14,12 @@ Item {
             return Qt.resolvedUrl(pgRvbbit ? "assets/pg-rvbbit.svg" : "assets/postgresql.svg");
         if (engine === "mysql")
             return Qt.resolvedUrl("assets/mysql.svg");
+        if (engine === "mariadb")
+            return Qt.resolvedUrl("assets/mariadb.svg");
+        if (engine === "percona")
+            return Qt.resolvedUrl("assets/percona.svg");
+        if (engine === "clickhouse")
+            return Qt.resolvedUrl("assets/clickhouse.svg");
         return "";
     }
 

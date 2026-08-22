@@ -33,10 +33,10 @@ function summary(at, counters, connections = {}, mvcc = {}) {
   }
 }
 
-function mysqlSummary(at, counters = {}, connections = {}, maintenance = {}) {
+function mysqlSummary(at, counters = {}, connections = {}, maintenance = {}, engine = "mysql") {
   return {
     kind: "summary",
-    engine: "mysql",
+    engine,
     collectedAtMs: at,
     identity: { database: "hazel", version: "8.4.11", inRecovery: false },
     capabilities: { fullStats: true, performanceSchema: 1 },
@@ -59,6 +59,33 @@ function mysqlSummary(at, counters = {}, connections = {}, maintenance = {}) {
   }
 }
 
+function clickhouseSummary(at, counters = {}, connections = {}, maintenance = {}, capacity = {}) {
+  return {
+    kind: "summary",
+    engine: "clickhouse",
+    collectedAtMs: at,
+    identity: { database: "hazel", user: "hazel", version: "25.8.32.4", family: "clickhouse", inRecovery: false },
+    capabilities: { fullStats: true, processes: true, merges: true, mutations: true },
+    connections: Object.assign({
+      used: 2, max: 4096, active: 1, idle: 0, idleInTransaction: 0,
+      waiting: 0, lockWaiting: 0, blocked: 0, oldestQuerySeconds: 1
+    }, connections),
+    counters: Object.assign({
+      workTotal: 100, rowsReturned: 1000, rowsModified: 50,
+      blocksRead: 10000, logBytes: 10000, failedQueries: 0,
+      statsReset: "2026-08-22T00:00:00", logStatsReset: "2026-08-22T00:00:00"
+    }, counters),
+    maintenance: Object.assign({
+      kind: "merge", backlogLabel: "MERGE DEBT", surfaceLabel: "PART SURFACE",
+      backlog: 0, workerCount: 0, autoWorkerCount: 0, activeMerges: 0,
+      pendingMutations: 0, mutationParts: 0, failedMutations: 0,
+      activeParts: 4, maxPartCount: 8
+    }, maintenance),
+    capacity: Object.assign({ memoryUsed: 256 * 1024 * 1024, memoryMax: 1024 * 1024 * 1024 }, capacity),
+    replication: { replicaCount: 0, failures: 0 }
+  }
+}
+
 test("normalizes MySQL work, redo, and purge debt without PostgreSQL vocabulary", () => {
   const first = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000), 120)
   const second = Model.ingestSummary(first, mysqlSummary(6000, {
@@ -74,6 +101,48 @@ test("normalizes MySQL work, redo, and purge debt without PostgreSQL vocabulary"
   assert.equal(second.histories.maintenanceBacklog.at(-1).value, 19)
   assert.match(Model.barLabel(second, "Work", false), /q\/s/)
   assert.match(Model.barLabel(second, "Maintenance", false), /undo/)
+})
+
+test("MariaDB and Percona retain distinct identity while sharing MySQL-family semantics", () => {
+  for (const engine of ["mariadb", "percona"]) {
+    const first = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000, {}, {}, {}, engine), 120)
+    const second = Model.ingestSummary(first, mysqlSummary(6000, {
+      workTotal: 125, rowsReturned: 1100, rowsModified: 65, logBytes: 15120
+    }, {}, { backlog: 19 }, engine), 120)
+    assert.equal(second.engine, engine)
+    assert.equal(Model.engineFamily(engine), "mysql")
+    assert.equal(second.rates.work, 5)
+    assert.match(Model.barLabel(second, "Work", false), /q\/s/)
+    assert.match(Model.barLabel(second, "Maintenance", false), /undo/)
+  }
+  assert.equal(Model.engineLabel("mariadb"), "MariaDB")
+  assert.equal(Model.engineLabel("percona"), "Percona")
+})
+
+test("ClickHouse uses query flow, memory capacity, and merge debt without lock or MVCC semantics", () => {
+  const first = Model.ingestSummary(Model.emptyState(), clickhouseSummary(1000), 120)
+  const second = Model.ingestSummary(first, clickhouseSummary(6000, {
+    workTotal: 150, rowsReturned: 1500, rowsModified: 100, logBytes: 15120
+  }, { active: 3 }, {
+    backlog: 7, activeMerges: 1, workerCount: 1, pendingMutations: 1, autoWorkerCount: 1,
+    mutationParts: 3, activeParts: 11
+  }, { memoryUsed: 900 * 1024 * 1024 }), 120)
+
+  assert.equal(Model.engineFamily("clickhouse"), "clickhouse")
+  assert.deepEqual(Model.engineDefaults("clickhouse"), { port: 9000, database: "default", user: "default" })
+  assert.equal(second.rates.work, 10)
+  assert.equal(second.rates.rowsReturned, 100)
+  assert.equal(second.rates.rowsModified, 10)
+  assert.equal(second.rates.logBytes, 1024)
+  assert.equal(second.capacityPercent, 87.890625)
+  assert.equal(second.maintenance.backlogLabel, "MERGE DEBT")
+  assert.equal(second.maintenance.pendingMutations, 1)
+  assert.equal(second.histories.capacityUsed.at(-1).value, 900 * 1024 * 1024)
+  assert.equal(second.severity, "warning")
+  assert.equal(second.statusLabel, "Memory pressure")
+  assert.match(Model.barLabel(second, "Work", false), /q\/s/)
+  assert.match(Model.barLabel(second, "Adaptive", false), /mem/)
+  assert.match(Model.barLabel(second, "Maintenance", false), /jobs/)
 })
 
 test("derives rates from consecutive counter snapshots", () => {
@@ -152,13 +221,14 @@ test("fleet toolbar aggregates every enabled collector without hiding failures",
   assert.match(Model.fleetBarLabel([healthy, blocked], "Adaptive", false), /2\/2 · 1 block/)
 })
 
-test("mixed-engine fleet labels keep transaction, query, dead-row, and undo units separate", () => {
+test("mixed-engine fleet labels keep transaction, query, dead-row, undo, and merge units separate", () => {
   const postgres = Model.ingestSummary(Model.emptyState(), summary(1000, {}), 120)
   const mysql = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000), 120)
-  const work = Model.fleetBarLabel([postgres, mysql], "Work", false)
-  const maintenance = Model.fleetBarLabel([postgres, mysql], "Maintenance", false)
-  assert.match(work, /PG .*t\/s · MY .*q\/s/)
-  assert.match(maintenance, /PG .*dead · MY .*undo/)
+  const clickhouse = Model.ingestSummary(Model.emptyState(), clickhouseSummary(1000, {}, {}, { backlog: 3 }), 120)
+  const work = Model.fleetBarLabel([postgres, mysql, clickhouse], "Work", false)
+  const maintenance = Model.fleetBarLabel([postgres, mysql, clickhouse], "Maintenance", false)
+  assert.match(work, /PG .*t\/s · MY .*q\/s · CH .*q\/s/)
+  assert.match(maintenance, /PG .*dead · MY .*undo · CH .*jobs/)
   assert.doesNotMatch(work, /ops\/s/)
 })
 
@@ -243,13 +313,25 @@ test("manifest keeps connection profiles in Hazel and secrets out of settings", 
   const root = path.join(__dirname, "..")
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"))
   assert.equal(manifest.schemaVersion, 1)
-  assert.equal(manifest.id, "ryan.hazel")
+  assert.equal(manifest.id, "ryrobes.hazel")
   assert.equal(manifest.barWidget.allowMultiple, true)
   assert.equal(manifest.barWidget.defaults.historyHours, 6)
   assert.ok(manifest.barWidget.schema.some((item) => item.key === "historyHours"))
   assert.ok(!manifest.barWidget.schema.some((item) => ["profileName", "host", "port", "database", "user", "sslMode"].includes(item.key)))
   assert.ok(!manifest.barWidget.schema.some((item) => item.key === "serviceName"))
   assert.ok(!manifest.barWidget.schema.some((item) => /password|secret|token/i.test(item.key)))
+})
+
+test("publishing surface uses the permanent plugin identity", () => {
+  const root = path.join(__dirname, "..")
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8")
+  const notices = fs.readFileSync(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8")
+
+  assert.match(readme, /omarchy plugin add https:\/\/github\.com\/ryrobes\/hazel\.git --enable/)
+  assert.match(readme, /omarchy plugin remove ryrobes\.hazel/)
+  assert.match(readme, /!\[Hazel monitoring five database profiles\]\(preview\.png\)/)
+  assert.match(notices, /Third-party notices/)
+  assert.ok(fs.existsSync(path.join(root, "preview.png")))
 })
 
 test("enabled named profiles own collectors, theme tone, and optional SSH transport", () => {
@@ -371,6 +453,9 @@ test("collapsed engine watermark swaps to pg_rvbbit when the extension is presen
   assert.match(watermark, /implicitHeight: 81/)
   assert.match(watermark, /pgRvbbit \? "assets\/pg-rvbbit\.svg" : "assets\/postgresql\.svg"/)
   assert.match(watermark, /engine === "mysql"[\s\S]*?assets\/mysql\.svg/)
+  assert.match(watermark, /engine === "mariadb"[\s\S]*?assets\/mariadb\.svg/)
+  assert.match(watermark, /engine === "percona"[\s\S]*?assets\/percona\.svg/)
+  assert.match(watermark, /engine === "clickhouse"[\s\S]*?assets\/clickhouse\.svg/)
   assert.match(watermark, /colorizationColor: root\.accent/)
   assert.match(sql, /FROM pg_extension WHERE extname = 'pg_rvbbit'/)
   assert.match(sql, /'pgRvbbit', identity\.has_pg_rvbbit/)
@@ -382,17 +467,35 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
   const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
   const aperture = fs.readFileSync(path.join(root, "PressureAperture.qml"), "utf8")
+  const background = fs.readFileSync(path.join(root, "BackgroundWork.qml"), "utf8")
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"))
 
   assert.match(setup, /"engine": engineField\.value/)
   assert.match(setup, /"value": "mysql", "label": "MySQL 8\+"/)
-  assert.match(controller, /sqlDirectory: engineName === "mysql" \? "mysql" : "postgres"/)
+  assert.match(setup, /"value": "mariadb", "label": "MariaDB"/)
+  assert.match(setup, /"value": "percona", "label": "Percona 8\+"/)
+  assert.match(setup, /"value": "clickhouse", "label": "ClickHouse"/)
+  assert.match(controller, /engineName === "mariadb" \? "mariadb"/)
+  assert.match(controller, /engineFamily === "clickhouse" \? "clickhouse"/)
   assert.match(controller, /function mysqlCommand\(\)/)
+  assert.match(controller, /function clickhouseCommand\(sql\)/)
   assert.match(controller, /mariadb.*--skip-column-names.*--unbuffered/)
+  assert.match(controller, /CLICKHOUSE_PASSWORD=/)
+  assert.match(controller, /function clickhouseCommand\(sql\)/)
+  assert.match(controller, /--query", String\(sql \|\| ""\)/)
+  assert.match(controller, /engineFamily === "clickhouse" && root\.oneShotSucceeded/)
+  assert.match(controller, /if \(sshEnabled && !tunnelReady\)[\s\S]*?ensureTunnel\(\)/)
   assert.match(controller, /MAX_EXECUTION_TIME=5000/)
+  assert.match(controller, /max_statement_time=5/)
   assert.match(block, /root\.snapshot\.maintenance\.surfaceLabel/)
-  assert.match(block, /root\.snapshot\.engine === "mysql" \? " q\/s" : " tx\/s"/)
+  assert.match(block, /Model\.isClickHouse\(root\.snapshot\.engine\).*?" q\/s" : " tx\/s"/s)
+  assert.match(block, /\["RUN", "MERGE", "MUTATE", "MEM"\]/)
+  assert.match(block, /BackgroundWork\s*\{/)
   assert.match(aperture, /maintenanceKind === "purge"/)
+  assert.match(aperture, /\["flow", "running", "memory", "maintenance"\]/)
+  assert.match(background, /NumberAnimation on phase/)
+  assert.match(background, /running: root\.visible && root\.jobs\.length > 0/)
+  assert.match(background, /parts at rest/)
   assert.deepEqual(manifest.barWidget.schema.find((item) => item.key === "toolbarMetric").options,
     ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"])
 })
@@ -411,12 +514,14 @@ test("profile cards keep only the accent rail and mark their database identity",
   assert.match(glyph, /colorizationColor: root\.accent/)
 })
 
-test("bar branding uses Hazel Visor and the panel loads its Outrun wordmark", () => {
+test("bar branding uses native vector Hazel marks without redistributing font software", () => {
   const root = path.join(__dirname, "..")
   const bar = fs.readFileSync(path.join(root, "BarWidget.qml"), "utf8")
   const panel = fs.readFileSync(path.join(root, "Panel.qml"), "utf8")
   const mark = fs.readFileSync(path.join(root, "HazelMark.qml"), "utf8")
+  const wordmark = fs.readFileSync(path.join(root, "HazelWordmark.qml"), "utf8")
   const rabbit = fs.readFileSync(path.join(root, "assets", "bar-rabbit.svg"), "utf8")
+  const wordmarkSvg = fs.readFileSync(path.join(root, "assets", "hazel-wordmark.svg"), "utf8")
 
   assert.match(bar, /HazelMark\s*\{/)
   assert.doesNotMatch(bar, /component RabbitMark: Item/)
@@ -430,10 +535,16 @@ test("bar branding uses Hazel Visor and the panel loads its Outrun wordmark", ()
   assert.doesNotMatch(mark, /MultiEffect|Image\s*\{/)
   assert.match(rabbit, /<title>Hazel Visor<\/title>/)
   assert.match(rabbit, /M5\.1 12\.2h13\.8l-2 3\.1H7\.1z/)
-  assert.match(panel, /FontLoader\s*\{\s*id: outrunFuture/)
-  assert.match(panel, /assets\/fonts\/Outrun-future-Bold\.otf/)
-  assert.match(panel, /text: "HAZEL"/)
-  assert.match(panel, /outrunFuture\.status === FontLoader\.Ready/)
+  assert.match(panel, /HazelWordmark\s*\{/)
+  assert.doesNotMatch(panel, /FontLoader|Outrun-future-Bold\.otf/)
+  assert.equal(fs.existsSync(path.join(root, "assets", "fonts", "Outrun-future-Bold.otf")), false)
+  assert.match(wordmark, /import QtQuick\.Shapes/)
+  assert.match(wordmark, /preferredRendererType: Shape\.CurveRenderer/)
+  assert.match(wordmark, /fillColor: root\.tint/)
+  assert.match(wordmark, /readonly property var glyphs:/)
+  assert.equal((wordmark.match(/"offset":/g) || []).length, 5)
+  assert.match(wordmarkSvg, /<title id="title">Hazel wordmark<\/title>/)
+  assert.equal((wordmarkSvg.match(/<path /g) || []).length, 5)
   assert.match(panel, /HazelMark\s*\{[\s\S]*?Layout\.preferredWidth: headerTitles\.implicitHeight[\s\S]*?Layout\.maximumHeight: headerTitles\.implicitHeight[\s\S]*?tint: root\.statusColor\(\)/)
   assert.match(panel, /ColumnLayout\s*\{\s*id: headerTitles/)
 })
@@ -473,10 +584,33 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   for (const file of ["summary.sql", "details.sql"]) {
     const mysqlSql = fs.readFileSync(path.join(root, "mysql", file), "utf8")
     assert.doesNotMatch(mysqlSql, /^\s*(insert|update|delete|replace|create|alter|drop|truncate|grant|revoke|call|do|set)\b/im)
+    const mariaSql = fs.readFileSync(path.join(root, "mariadb", file), "utf8")
+    assert.doesNotMatch(mariaSql, /^\s*(insert|update|delete|replace|create|alter|drop|truncate|grant|revoke|call|do|set)\b/im)
   }
   const mysqlDetails = fs.readFileSync(path.join(root, "mysql", "details.sql"), "utf8")
   assert.match(mysqlDetails, /performance_schema\.processlist/)
   assert.match(mysqlDetails, /performance_schema\.data_lock_waits/)
   assert.match(mysqlDetails, /performance_schema\.metadata_locks/)
   assert.match(mysqlDetails, /REGEXP_REPLACE/)
+  const mysqlSummarySql = fs.readFileSync(path.join(root, "mysql", "summary.sql"), "utf8")
+  assert.match(mysqlSummarySql, /version_comment[\s\S]*?LIKE '%percona%'[\s\S]*?'percona'/)
+  const mariaDetails = fs.readFileSync(path.join(root, "mariadb", "details.sql"), "utf8")
+  assert.match(mariaDetails, /information_schema\.PROCESSLIST/)
+  assert.match(mariaDetails, /information_schema\.INNODB_LOCK_WAITS/)
+  assert.match(mariaDetails, /information_schema\.INNODB_LOCKS/)
+  assert.match(mariaDetails, /REGEXP_REPLACE/)
+
+  for (const file of ["summary.sql", "details.sql"]) {
+    const clickhouseSql = fs.readFileSync(path.join(root, "clickhouse", file), "utf8")
+    assert.doesNotMatch(clickhouseSql, /^\s*(insert|update|delete|create|alter|drop|truncate|grant|revoke|kill|optimize|system|set)\b/im)
+  }
+  const clickhouseSummarySql = fs.readFileSync(path.join(root, "clickhouse", "summary.sql"), "utf8")
+  const clickhouseDetails = fs.readFileSync(path.join(root, "clickhouse", "details.sql"), "utf8")
+  assert.match(clickhouseSummarySql, /system\.events/)
+  assert.match(clickhouseSummarySql, /system\.merges/)
+  assert.match(clickhouseSummarySql, /system\.mutations/)
+  assert.match(clickhouseDetails, /system\.processes/)
+  assert.match(clickhouseDetails, /system\.parts/)
+  assert.match(clickhouseDetails, /system\.mutations/)
+  assert.match(clickhouseDetails, /replaceRegexpAll/)
 })

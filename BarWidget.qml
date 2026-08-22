@@ -79,7 +79,7 @@ BarWidget {
         leaderElection.restart();
     }
 
-    moduleName: "ryan.hazel"
+    moduleName: "ryrobes.hazel"
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
     onBarChanged: injectPanel()

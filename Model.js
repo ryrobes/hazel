@@ -15,6 +15,45 @@ function safeArray(value) {
   return Array.isArray(value) ? value : []
 }
 
+function engineFamily(engine) {
+  var value = String(engine || "postgresql").toLowerCase()
+  if (value === "mysql" || value === "mariadb" || value === "percona") return "mysql"
+  return value === "clickhouse" ? "clickhouse" : "postgresql"
+}
+
+function isMysqlFamily(engine) {
+  return engineFamily(engine) === "mysql"
+}
+
+function isClickHouse(engine) {
+  return engineFamily(engine) === "clickhouse"
+}
+
+function engineLabel(engine) {
+  var value = String(engine || "postgresql").toLowerCase()
+  if (value === "mariadb") return "MariaDB"
+  if (value === "percona") return "Percona"
+  if (value === "mysql") return "MySQL"
+  if (value === "clickhouse") return "ClickHouse"
+  return "PostgreSQL"
+}
+
+function engineShortLabel(engine) {
+  var value = String(engine || "postgresql").toLowerCase()
+  if (value === "mariadb") return "MARIA"
+  if (value === "percona") return "PERCONA"
+  if (value === "mysql") return "MYSQL"
+  if (value === "clickhouse") return "CH"
+  return "PG"
+}
+
+function engineDefaults(engine) {
+  var family = engineFamily(engine)
+  if (family === "mysql") return { port: 3306, database: "mysql", user: "root" }
+  if (family === "clickhouse") return { port: 9000, database: "default", user: "default" }
+  return { port: 5432, database: "postgres", user: "postgres" }
+}
+
 function emptyState() {
   return {
     engine: "postgresql",
@@ -62,10 +101,17 @@ function emptyState() {
       bufferWaitFree: 0,
       lastMaintenance: null
     },
+    capacity: {
+      memoryUsed: 0,
+      memoryMax: 0,
+      diskUsed: 0,
+      diskTotal: 0
+    },
     replication: {},
     rates: { work: 0, logBytes: 0, transactions: 0, walBytes: 0, rowsModified: 0, rowsReturned: 0 },
     cacheHitPercent: 0,
     connectionPercent: 0,
+    capacityPercent: 0,
     deadTuplePercent: 0,
     peakTransactions: 0,
     pressures: { workload: 0, contention: 0, connections: 0, maintenance: 0, mvcc: 0 },
@@ -82,11 +128,13 @@ function emptyState() {
       connectionsUsed: [],
       deadTuples: [],
       autovacuumCount: [],
-      vacuumWorkers: []
+      vacuumWorkers: [],
+      capacityUsed: []
     },
     activity: [],
     relations: [],
     blocking: [],
+    background: [],
     vacuum: [],
     severity: "normal",
     statusLabel: "Connecting"
@@ -227,6 +275,17 @@ function deriveSeverity(connections, connectionPercent, deadTuplePercent) {
   return { severity: "normal", label: "Quiet" }
 }
 
+function deriveClickHouseSeverity(connections, capacityPercent, maintenance) {
+  var work = safeObject(maintenance)
+  if (finiteNumber(work.failedMutations, 0) > 0 || capacityPercent >= 95)
+    return { severity: "critical", label: finiteNumber(work.failedMutations, 0) > 0 ? "Mutation failed" : "Memory limit" }
+  if (capacityPercent >= 80 || finiteNumber(work.pendingMutations, 0) > 0 || finiteNumber(work.maxPartCount, 0) >= 300)
+    return { severity: "warning", label: capacityPercent >= 80 ? "Memory pressure" : (finiteNumber(work.pendingMutations, 0) > 0 ? "Background debt" : "Part pressure") }
+  if (connections.active > 0 || finiteNumber(work.activeMerges, 0) > 0)
+    return { severity: "normal", label: connections.active > 0 ? "Active" : "Merging" }
+  return { severity: "normal", label: "Quiet" }
+}
+
 function ingestSummary(previousState, payload, historyPolicy) {
   var previous = previousState && previousState.sequence > 0 ? previousState : emptyState()
   var nextPayload = safeObject(payload)
@@ -250,7 +309,13 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.connections = Object.assign(next.connections, connections)
   next.counters = counters
   next.mvcc = Object.assign(next.mvcc, mvcc)
-  if (next.engine === "mysql") {
+  if (isClickHouse(next.engine)) {
+    next.maintenance = Object.assign(next.maintenance, {
+      kind: "merge",
+      backlogLabel: "MERGE DEBT",
+      surfaceLabel: "PART SURFACE"
+    }, maintenancePayload)
+  } else if (isMysqlFamily(next.engine)) {
     next.maintenance = Object.assign(next.maintenance, {
       kind: "purge",
       backlogLabel: "PURGE DEBT",
@@ -267,32 +332,35 @@ function ingestSummary(previousState, payload, historyPolicy) {
       lastMaintenance: next.mvcc.lastAutovacuum || next.mvcc.lastVacuum || null
     }, maintenancePayload)
   }
+  next.capacity = Object.assign(next.capacity, safeObject(nextPayload.capacity))
   next.replication = safeObject(nextPayload.replication)
   next.activity = safeArray(previous.activity)
   next.relations = safeArray(previous.relations)
   next.blocking = safeArray(previous.blocking)
+  next.background = safeArray(previous.background)
   next.vacuum = safeArray(previous.vacuum)
 
-  var mysql = next.engine === "mysql"
-  next.rates.work = mysql
+  var counterEngine = isMysqlFamily(next.engine) || isClickHouse(next.engine)
+  next.rates.work = counterEngine
     ? rate(counters, previous.counters, ["workTotal"], elapsedSeconds, "statsReset")
     : rate(counters, previous.counters, ["xactCommit", "xactRollback"], elapsedSeconds, "databaseStatsReset")
   if (elapsedSeconds > 0)
     next.rates.work = Math.max(0, next.rates.work - Math.max(0, finiteNumber(nextPayload.collectorTransactions, 0)) / elapsedSeconds)
   next.rates.transactions = next.rates.work
-  next.rates.rowsModified = mysql
+  next.rates.rowsModified = counterEngine
     ? rate(counters, previous.counters, ["rowsModified"], elapsedSeconds, "statsReset")
     : rate(counters, previous.counters, ["tuplesInserted", "tuplesUpdated", "tuplesDeleted"], elapsedSeconds, "databaseStatsReset")
-  next.rates.rowsReturned = mysql
+  next.rates.rowsReturned = counterEngine
     ? rate(counters, previous.counters, ["rowsReturned"], elapsedSeconds, "statsReset")
     : rate(counters, previous.counters, ["tuplesReturned"], elapsedSeconds, "databaseStatsReset")
-  next.rates.logBytes = mysql
+  next.rates.logBytes = counterEngine
     ? rate(counters, previous.counters, ["logBytes"], elapsedSeconds, "logStatsReset")
     : rate(counters, previous.counters, ["walBytes"], elapsedSeconds, "walStatsReset")
   next.rates.walBytes = next.rates.logBytes
 
   next.cacheHitPercent = percentage(counters.blocksHit, finiteNumber(counters.blocksHit, 0) + finiteNumber(counters.blocksRead, 0))
   next.connectionPercent = percentage(next.connections.used, next.connections.max)
+  next.capacityPercent = percentage(next.capacity.memoryUsed, next.capacity.memoryMax)
   next.deadTuplePercent = percentage(next.mvcc.deadTuples, finiteNumber(next.mvcc.liveTuples, 0) + finiteNumber(next.mvcc.deadTuples, 0))
   next.peakTransactions = Math.max(finiteNumber(previous.peakTransactions, 0), next.rates.work)
 
@@ -300,10 +368,12 @@ function ingestSummary(previousState, payload, historyPolicy) {
     ? next.connections.waiting / next.connections.active
     : (next.connections.waiting > 0 ? 1 : 0)
   next.pressures.workload = next.peakTransactions > 0 ? clamp(next.rates.work / next.peakTransactions, 0, 1) : 0
-  next.pressures.contention = clamp(Math.max(waitingShare, next.connections.blocked * 0.5), 0, 1)
-  next.pressures.connections = next.connectionPercent / 100
+  next.pressures.contention = isClickHouse(next.engine) ? 0 : clamp(Math.max(waitingShare, next.connections.blocked * 0.5), 0, 1)
+  next.pressures.connections = isClickHouse(next.engine) ? next.capacityPercent / 100 : next.connectionPercent / 100
   next.pressures.mvcc = next.deadTuplePercent / 100
-  next.pressures.maintenance = next.engine === "mysql" ? 0 : next.pressures.mvcc
+  next.pressures.maintenance = isClickHouse(next.engine)
+    ? clamp(finiteNumber(next.maintenance.backlog, 0) / Math.max(1, finiteNumber(next.maintenance.backlog, 0)), 0, 1)
+    : (isMysqlFamily(next.engine) ? 0 : next.pressures.mvcc)
 
   var previousWork = previous.histories.work || previous.histories.transactions
   var previousLog = previous.histories.logBytes || previous.histories.walBytes
@@ -321,8 +391,11 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.histories.deadTuples = next.histories.maintenanceBacklog
   next.histories.autovacuumCount = appendHistory(previous.histories.autovacuumCount, timestamp, next.mvcc.autovacuumCount, policy)
   next.histories.vacuumWorkers = appendHistory(previous.histories.vacuumWorkers, timestamp, next.mvcc.vacuumWorkers, policy)
+  next.histories.capacityUsed = appendHistory(previous.histories.capacityUsed, timestamp, next.capacity.memoryUsed, policy)
 
-  var status = deriveSeverity(next.connections, next.connectionPercent, next.deadTuplePercent)
+  var status = isClickHouse(next.engine)
+    ? deriveClickHouseSeverity(next.connections, next.capacityPercent, next.maintenance)
+    : deriveSeverity(next.connections, next.connectionPercent, next.deadTuplePercent)
   next.severity = status.severity
   next.statusLabel = status.label
   return next
@@ -336,6 +409,7 @@ function ingestDetails(state, payload) {
   next.activity = safeArray(source.activity)
   next.relations = safeArray(source.relations)
   next.blocking = safeArray(source.blocking)
+  next.background = safeArray(source.background)
   next.vacuum = safeArray(source.vacuum)
   return next
 }
@@ -384,19 +458,22 @@ function barLabel(state, mode, vertical) {
   if (!data.connected) return vertical ? "H\n—" : "HZL  —"
   var selected = String(mode || "Adaptive")
   if (selected === "Adaptive") {
-    if (data.connections.blocked > 0) selected = "Waits"
+    if (isClickHouse(data.engine) && data.capacityPercent >= 80) selected = "Capacity"
+    else if (isClickHouse(data.engine) && finiteNumber(data.maintenance.backlog, 0) > 0) selected = "Maintenance"
+    else if (data.connections.blocked > 0) selected = "Waits"
     else if (data.connectionPercent >= 80) selected = "Connections"
     else if (data.connections.waiting > 0) selected = "Activity"
     else selected = "Work"
   }
   var value = ""
-  var workSuffix = data.engine === "mysql" ? "q/s" : "t/s"
+  var workSuffix = isMysqlFamily(data.engine) || isClickHouse(data.engine) ? "q/s" : "t/s"
   if (selected === "Work" || selected === "Transactions") value = formatRate(data.rates.work, workSuffix)
   else if (selected === "Activity") value = data.connections.active + " act"
   else if (selected === "Connections") value = Math.round(data.connectionPercent) + "% conn"
+  else if (selected === "Capacity") value = Math.round(data.capacityPercent) + "% mem"
   else if (selected === "Waits") value = data.connections.blocked > 0 ? data.connections.blocked + " block" : data.connections.waiting + " wait"
   else if (selected === "Log" || selected === "WAL") value = formatBytes(data.rates.logBytes) + "/s"
-  else if (selected === "Maintenance" || selected === "MVCC") value = formatRate(data.maintenance.backlog, data.engine === "mysql" ? " undo" : " dead")
+  else if (selected === "Maintenance" || selected === "MVCC") value = formatRate(data.maintenance.backlog, isClickHouse(data.engine) ? " jobs" : (isMysqlFamily(data.engine) ? " undo" : " dead"))
   else value = formatRate(data.rates.work, workSuffix)
   return vertical ? value.replace(/ .*/, "") : value
 }
@@ -419,8 +496,11 @@ function fleetSummary(states) {
     maintenanceBacklog: 0,
     postgresMaintenance: 0,
     mysqlMaintenance: 0,
+    clickhouseWork: 0,
+    clickhouseMaintenance: 0,
     postgresCount: 0,
     mysqlCount: 0,
+    clickhouseCount: 0,
     severity: "normal"
   }
   for (var i = 0; i < source.length; i++) {
@@ -438,7 +518,11 @@ function fleetSummary(states) {
     summary.work += finiteNumber(rates.work, rates.transactions)
     summary.logBytes += finiteNumber(rates.logBytes, rates.walBytes)
     summary.maintenanceBacklog += finiteNumber(maintenance.backlog, safeObject(state.mvcc).deadTuples)
-    if (state.engine === "mysql") {
+    if (isClickHouse(state.engine)) {
+      summary.clickhouseCount++
+      summary.clickhouseWork += finiteNumber(rates.work, rates.transactions)
+      summary.clickhouseMaintenance += finiteNumber(maintenance.backlog, 0)
+    } else if (isMysqlFamily(state.engine)) {
       summary.mysqlCount++
       summary.mysqlWork += finiteNumber(rates.work, rates.transactions)
       summary.mysqlMaintenance += finiteNumber(maintenance.backlog, 0)
@@ -462,22 +546,22 @@ function fleetBarLabel(states, mode, vertical) {
   var fleet = fleetSummary(source)
   var prefix = vertical ? "" : fleet.connected + "/" + fleet.total + " · "
   if (mode === "Work" || mode === "Transactions") {
-    if (fleet.postgresCount > 0 && fleet.mysqlCount > 0)
-      return prefix + "PG " + formatRate(fleet.postgresWork, "t/s") + " · MY " + formatRate(fleet.mysqlWork, "q/s")
-    return prefix + (fleet.mysqlCount > 0
-      ? formatRate(fleet.mysqlWork, "q/s")
-      : formatRate(fleet.postgresWork, "t/s"))
+    var workParts = []
+    if (fleet.postgresCount > 0) workParts.push((fleet.mysqlCount + fleet.clickhouseCount > 0 ? "PG " : "") + formatRate(fleet.postgresWork, "t/s"))
+    if (fleet.mysqlCount > 0) workParts.push((fleet.postgresCount + fleet.clickhouseCount > 0 ? "MY " : "") + formatRate(fleet.mysqlWork, "q/s"))
+    if (fleet.clickhouseCount > 0) workParts.push((fleet.postgresCount + fleet.mysqlCount > 0 ? "CH " : "") + formatRate(fleet.clickhouseWork, "q/s"))
+    return prefix + workParts.join(" · ")
   }
   if (mode === "Activity") return prefix + fleet.active + " active"
   if (mode === "Connections") return prefix + fleet.used + "/" + fleet.max
   if (mode === "Waits") return prefix + fleet.waiting + " wait"
   if (mode === "Log" || mode === "WAL") return prefix + formatBytes(fleet.logBytes) + "/s"
   if (mode === "Maintenance" || mode === "MVCC") {
-    if (fleet.postgresCount > 0 && fleet.mysqlCount > 0)
-      return prefix + "PG " + formatRate(fleet.postgresMaintenance, " dead") + " · MY " + formatRate(fleet.mysqlMaintenance, " undo")
-    return prefix + (fleet.mysqlCount > 0
-      ? formatRate(fleet.mysqlMaintenance, " undo")
-      : formatRate(fleet.postgresMaintenance, " dead"))
+    var maintenanceParts = []
+    if (fleet.postgresCount > 0) maintenanceParts.push((fleet.mysqlCount + fleet.clickhouseCount > 0 ? "PG " : "") + formatRate(fleet.postgresMaintenance, " dead"))
+    if (fleet.mysqlCount > 0) maintenanceParts.push((fleet.postgresCount + fleet.clickhouseCount > 0 ? "MY " : "") + formatRate(fleet.mysqlMaintenance, " undo"))
+    if (fleet.clickhouseCount > 0) maintenanceParts.push((fleet.postgresCount + fleet.mysqlCount > 0 ? "CH " : "") + formatRate(fleet.clickhouseMaintenance, " jobs"))
+    return prefix + maintenanceParts.join(" · ")
   }
   if (fleet.blocked > 0) return prefix + fleet.blocked + " block"
   if (fleet.waiting > 0) return prefix + fleet.waiting + " wait"
@@ -497,6 +581,12 @@ function escapeMarkup(value) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     clamp: clamp,
+    engineFamily: engineFamily,
+    isMysqlFamily: isMysqlFamily,
+    isClickHouse: isClickHouse,
+    engineLabel: engineLabel,
+    engineShortLabel: engineShortLabel,
+    engineDefaults: engineDefaults,
     emptyState: emptyState,
     ingestSummary: ingestSummary,
     ingestDetails: ingestDetails,
