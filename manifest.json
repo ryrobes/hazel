@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "id": "ryan.hazel",
+  "name": "Hazel",
+  "version": "0.1.0",
+  "author": "Ryan Robitaille",
+  "license": "MIT",
+  "description": "A quiet, read-only multi-database instrument for the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Hazel",
+    "description": "PostgreSQL activity, contention, connections, WAL, and MVCC across every enabled profile.",
+    "category": "System",
+    "aliases": ["postgres", "postgresql", "database", "db-monitor"],
+    "allowMultiple": true,
+    "defaultSection": "right",
+    "defaults": {
+      "configured": false,
+      "profileName": "Postgres",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "database": "postgres",
+      "user": "postgres",
+      "sslMode": "prefer",
+      "tone": "accent",
+      "sshEnabled": false,
+      "sshHost": "",
+      "sshPort": 22,
+      "sshUser": "",
+      "sshIdentityFile": "",
+      "sshLocalPort": 55439,
+      "closedRefreshSec": 5,
+      "openRefreshSec": 2,
+      "historyHours": 6,
+      "toolbarMetric": "Adaptive"
+    },
+    "schema": [
+      {
+        "key": "closedRefreshSec",
+        "type": "integer",
+        "label": "Toolbar refresh (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "openRefreshSec",
+        "type": "integer",
+        "label": "Panel refresh (seconds)",
+        "min": 1,
+        "max": 10,
+        "step": 1,
+        "defaultValue": 2
+      },
+      {
+        "key": "historyHours",
+        "type": "integer",
+        "label": "Default history view (hours)",
+        "min": 1,
+        "max": 24,
+        "step": 1,
+        "defaultValue": 6,
+        "description": "Initial behavior-memory lens. Hazel retains up to 24 hours in memory; switch between 1H, 3H, 6H, and 24H inside the panel."
+      },
+      {
+        "key": "toolbarMetric",
+        "type": "enum",
+        "label": "Toolbar metric",
+        "options": ["Adaptive", "Transactions", "Activity", "Connections", "Waits", "WAL", "MVCC"],
+        "defaultValue": "Adaptive"
+      }
+    ]
+  }
+}

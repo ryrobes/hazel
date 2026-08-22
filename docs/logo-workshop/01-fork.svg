@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>Hazel Fork</title>
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+    <rect width="24" height="24" fill="#fff"/>
+    <path d="M6.2 13.3 10.8 12.2l-1.4 2.4-2.7.4zm11.6 0-4.6-1.1 1.4 2.4 2.7.4z" fill="#000"/>
+    <path d="m10.2 18 1.8 1.5 1.8-1.5-1.8 3z" fill="#000"/>
+  </mask>
+  <g mask="url(#cut)" fill="#fff">
+    <path d="M3.2.2 7.4 1.6l3.1 9.5-3.9-1.7-2.1-5z"/>
+    <path d="M20.8.2 16.6 1.6l-3.1 9.5 3.9-1.7 2.1-5z"/>
+    <path d="m6.9 8.3 5.1-1.8 5.1 1.8 2.8 5.7-2.1 6.3-5.8 2.4-5.8-2.4L4.1 14z"/>
+  </g>
+</svg>

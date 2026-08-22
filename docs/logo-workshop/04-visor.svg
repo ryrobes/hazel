@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>Hazel Visor</title>
+  <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+    <rect width="24" height="24" fill="#fff"/>
+    <path d="M5.1 12.2h13.8l-2 3.1H7.1z" fill="#000"/>
+    <path d="m10.2 18.3 1.8 1.4 1.8-1.4-1.8 3z" fill="#000"/>
+  </mask>
+  <g mask="url(#cut)" fill="#fff">
+    <path d="M3.2.6 8.4 2l2 9.3-4.2-1.7-2.1-5z"/>
+    <path d="M20.8.6 15.6 2l-2 9.3 4.2-1.7 2.1-5z"/>
+    <path d="m6.2 8 5.8-2.5L17.8 8l3.1 5.7-2.3 6.8L12 23 5.4 20.5l-2.3-6.8z"/>
+  </g>
+</svg>

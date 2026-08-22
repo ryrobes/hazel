@@ -1,0 +1,6 @@
+*.qmlc
+*.jsc
+*.log
+.cache/
+docs/screenshots/*.png
+!docs/screenshots/.gitkeep
