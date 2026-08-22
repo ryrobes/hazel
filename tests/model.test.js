@@ -497,7 +497,7 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(controller, /function mysqlCommand\(\)/)
   assert.match(controller, /function clickhouseCommand\(sql\)/)
   assert.match(controller, /mariadb.*--skip-column-names.*--unbuffered/)
-  assert.match(controller, /CLICKHOUSE_PASSWORD=/)
+  assert.match(controller, /environment\.CLICKHOUSE_PASSWORD = sessionPassword/)
   assert.match(controller, /function clickhouseCommand\(sql\)/)
   assert.match(controller, /--query", String\(sql \|\| ""\)/)
   assert.match(controller, /engineFamily === "clickhouse" && root\.oneShotSucceeded/)
@@ -515,6 +515,25 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(background, /parts at rest/)
   assert.deepEqual(manifest.barWidget.schema.find((item) => item.key === "toolbarMetric").options,
     ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"])
+})
+
+test("collector secrets stay out of argv and database streams are bounded", () => {
+  const root = path.join(__dirname, "..")
+  const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
+  const reader = fs.readFileSync(path.join(root, "BoundedLineReader.qml"), "utf8")
+
+  assert.doesNotMatch(controller, /\["env"/)
+  assert.doesNotMatch(controller, /command\.push\("(?:PGPASSWORD|MYSQL_PWD|CLICKHOUSE_PASSWORD)=/)
+  assert.match(controller, /psqlProc\.environment = databaseEnvironment\(\)/)
+  assert.match(controller, /environment\.PGPASSWORD = sessionPassword/)
+  assert.match(controller, /environment\.MYSQL_PWD = sessionPassword/)
+  assert.match(controller, /environment\.CLICKHOUSE_PASSWORD = sessionPassword/)
+  assert.equal((controller.match(/stdout:\s*BoundedLineReader/g) || []).length, 1)
+  assert.equal((controller.match(/stderr:\s*BoundedLineReader/g) || []).length, 2)
+  assert.match(reader, /splitMarker:\s*""/)
+  assert.match(reader, /pending\.length \+ segment\.length > maximumLineLength/)
+  assert.match(reader, /discardingOversizedLine = true/)
+  assert.match(reader, /readonly property int bufferedLength: pending\.length/)
 })
 
 test("profile cards keep only the accent rail and mark their database identity", () => {
@@ -625,7 +644,7 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   assert.match(details, /'queryText'/)
   assert.match(details, /AND state = 'active'/)
   assert.match(details, /regexp_replace\(query/)
-  assert.match(controller, /PGAPPNAME=hazel-monitor/)
+  assert.match(controller, /environment\.PGAPPNAME = "hazel-monitor"/)
   assert.match(summarySql, /application_name IS DISTINCT FROM 'hazel-monitor'/)
   assert.match(details, /application_name IS DISTINCT FROM 'hazel-monitor'/)
 

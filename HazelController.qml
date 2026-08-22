@@ -175,34 +175,11 @@ Item {
     }
 
     function psqlCommand() {
-        var command = ["env", "PGAPPNAME=hazel-monitor", "PGCONNECT_TIMEOUT=3", "PGOPTIONS=-c statement_timeout=5000", "PGSSLMODE=" + sslMode];
-        if (sessionPassword !== "")
-            command.push("PGPASSWORD=" + sessionPassword);
-        if (sshEnabled) {
-            command.push("PGHOST=127.0.0.1");
-            command.push("PGPORT=" + String(sshLocalPort));
-        } else {
-            if (hostName !== "")
-                command.push("PGHOST=" + hostName);
-            if (port > 0)
-                command.push("PGPORT=" + String(port));
-        }
-
-        if (databaseName !== "")
-            command.push("PGDATABASE=" + databaseName);
-
-        if (userName !== "")
-            command.push("PGUSER=" + userName);
-
-        command.push("psql", "-X", "-w", "-qAt", "--no-readline", "--set=ON_ERROR_STOP=on");
-        return command;
+        return ["psql", "-X", "-w", "-qAt", "--no-readline", "--set=ON_ERROR_STOP=on"];
     }
 
     function mysqlCommand() {
-        var command = ["env"];
-        if (sessionPassword !== "")
-            command.push("MYSQL_PWD=" + sessionPassword);
-        command.push("mariadb", "--batch", "--raw", "--skip-column-names", "--silent", "--unbuffered", "--connect-timeout=3");
+        var command = ["mariadb", "--batch", "--raw", "--skip-column-names", "--silent", "--unbuffered", "--connect-timeout=3"];
         command.push(engineName === "mariadb"
             ? "--init-command=SET SESSION max_statement_time=5"
             : "--init-command=SET SESSION MAX_EXECUTION_TIME=5000");
@@ -221,10 +198,7 @@ Item {
     }
 
     function clickhouseCommand(sql) {
-        var command = ["env"];
-        if (sessionPassword !== "")
-            command.push("CLICKHOUSE_PASSWORD=" + sessionPassword);
-        command.push("clickhouse", "client", "--format", "JSONEachRow", "--connect_timeout=3", "--receive_timeout=8", "--send_timeout=8", "--max_execution_time=5");
+        var command = ["clickhouse", "client", "--format", "JSONEachRow", "--connect_timeout=3", "--receive_timeout=8", "--send_timeout=8", "--max_execution_time=5"];
         command.push("--host=" + (sshEnabled ? "127.0.0.1" : hostName));
         command.push("--port=" + String(sshEnabled ? sshLocalPort : port));
         command.push("--user=" + userName);
@@ -236,6 +210,30 @@ Item {
             command.push("--secure");
         command.push("--query", String(sql || ""));
         return command;
+    }
+
+    function databaseEnvironment() {
+        var environment = {};
+        if (engineFamily === "postgresql") {
+            environment.PGAPPNAME = "hazel-monitor";
+            environment.PGCONNECT_TIMEOUT = "3";
+            environment.PGOPTIONS = "-c statement_timeout=5000";
+            environment.PGSSLMODE = sslMode;
+            environment.PGHOST = sshEnabled ? "127.0.0.1" : hostName;
+            environment.PGPORT = String(sshEnabled ? sshLocalPort : port);
+            if (databaseName !== "")
+                environment.PGDATABASE = databaseName;
+            if (userName !== "")
+                environment.PGUSER = userName;
+            if (sessionPassword !== "")
+                environment.PGPASSWORD = sessionPassword;
+        } else if (engineFamily === "mysql") {
+            if (sessionPassword !== "")
+                environment.MYSQL_PWD = sessionPassword;
+        } else if (engineFamily === "clickhouse" && sessionPassword !== "") {
+            environment.CLICKHOUSE_PASSWORD = sessionPassword;
+        }
+        return environment;
     }
 
     function databaseCommand() {
@@ -304,6 +302,7 @@ Item {
             request(next);
             return;
         }
+        psqlProc.environment = databaseEnvironment();
         psqlProc.command = databaseCommand();
         psqlProc.running = true;
     }
@@ -332,6 +331,7 @@ Item {
             oneShotSucceeded = false;
             errorText = "";
             queryWatchdog.restart();
+            psqlProc.environment = databaseEnvironment();
             psqlProc.command = clickhouseCommand(clickhouseSql);
             psqlProc.running = true;
             return;
@@ -416,6 +416,14 @@ Item {
 
         text = text.replace(/^(psql|mariadb|mysql|clickhouse(?:-client)?):\s*/i, "");
         errorText = text.length > 180 ? text.slice(0, 177) + "…" : text;
+    }
+
+    function rejectOversizedOutput(channel, limit) {
+        pendingKind = "";
+        queryWatchdog.stop();
+        errorText = engineLabel() + " returned an oversized " + channel + " line (limit " + limit + " characters)";
+        if (psqlProc.running)
+            psqlProc.running = false;
     }
 
     function restartConnection() {
@@ -529,6 +537,8 @@ Item {
             });
         }
         onExited: function(exitCode, exitStatus) {
+            databaseStdout.finish();
+            databaseStderr.finish();
             root.processReady = false;
             root.pendingKind = "";
             queryWatchdog.stop();
@@ -552,15 +562,25 @@ Item {
             }
         }
 
-        stdout: SplitParser {
-            onRead: function(line) {
+        stdout: BoundedLineReader {
+            id: databaseStdout
+            maximumLineLength: 1024 * 1024
+            onLine: function(line) {
                 root.consumeLine(line);
+            }
+            onLineRejected: function(limit) {
+                root.rejectOversizedOutput("output", limit);
             }
         }
 
-        stderr: SplitParser {
-            onRead: function(line) {
+        stderr: BoundedLineReader {
+            id: databaseStderr
+            maximumLineLength: 64 * 1024
+            onLine: function(line) {
                 root.consumeError(line);
+            }
+            onLineRejected: function(limit) {
+                root.rejectOversizedOutput("error", limit);
             }
         }
 
@@ -574,6 +594,7 @@ Item {
             tunnelWarmup.restart();
         }
         onExited: function(exitCode, exitStatus) {
+            tunnelStderr.finish();
             tunnelWarmup.stop();
             root.tunnelReady = false;
             if (psqlProc.running)
@@ -587,13 +608,21 @@ Item {
             }
         }
 
-        stderr: SplitParser {
-            onRead: function(line) {
+        stderr: BoundedLineReader {
+            id: tunnelStderr
+            maximumLineLength: 16 * 1024
+            onLine: function(line) {
                 var value = String(line || "").trim();
                 if (value === "")
                     return ;
                 root.tunnelErrorText = value.length > 180 ? value.slice(0, 177) + "…" : value;
                 root.errorText = root.tunnelErrorText;
+            }
+            onLineRejected: function(limit) {
+                root.tunnelErrorText = "SSH returned an oversized error line";
+                root.errorText = root.tunnelErrorText;
+                if (tunnelProc.running)
+                    tunnelProc.running = false;
             }
         }
     }

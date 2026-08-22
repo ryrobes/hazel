@@ -198,9 +198,10 @@ Saved QML changes hot-reload. Validate before testing:
 ```sh
 omarchy plugin validate .
 qmllint -I /usr/share/omarchy/shell \
-  BarWidget.qml Panel.qml HazelController.qml Sparkline.qml PressureAperture.qml \
+  BarWidget.qml Panel.qml HazelController.qml BoundedLineReader.qml Sparkline.qml PressureAperture.qml \
   BackgroundWork.qml HazelMark.qml HazelWordmark.qml LiveQueries.qml LockFlow.qml InstanceBlock.qml
 node --test tests/model.test.js
+tests/bounded-line-reader.test.sh
 tests/postgres-sql.test.sh
 tests/mysql-sql.test.sh
 tests/mariadb-sql.test.sh
@@ -240,10 +241,15 @@ deleted automatically with the plugin.
 
 - No telemetry or external service
 - No passwords in Omarchy settings or Hazel-owned files
+- Passwords never enter client command arguments; they are applied to the child
+  process environment at launch
 - No writes to the monitored database
 - Active query text is session-only, whitespace-normalized, and literal-masked
 - Fixed SQL shipped with the plugin; connection fields are passed through
   environment variables, not interpolated into SQL
+- Database output lines are capped at 1,048,576 characters and client error
+  lines at 65,536; an over-limit producer is stopped instead of growing the
+  shell buffer
 
 ## License
 
