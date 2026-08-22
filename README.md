@@ -231,6 +231,11 @@ ready for them.
 omarchy plugin remove ryrobes.hazel
 ```
 
+Omarchy removes the configured bar instance when a plugin is disabled or
+removed, so its profile settings must be recreated after a later re-enable.
+Remembered passwords live separately in the desktop keyring and are not
+deleted automatically with the plugin.
+
 ## Privacy and safety
 
 - No telemetry or external service
