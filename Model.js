@@ -65,6 +65,16 @@ function dependencyInstallCommand(engine, errorText) {
   return "omarchy pkg add postgresql-libs"
 }
 
+// Hazel controls its own Text.textFormat, but the Omarchy bar owns the final
+// tooltip Text item. Neutralize markup delimiters before untrusted profile or
+// client text crosses that external AutoText boundary.
+function neutralizeAutoText(value) {
+  return String(value === undefined || value === null ? "" : value)
+    .replace(/&/g, "＆")
+    .replace(/</g, "‹")
+    .replace(/>/g, "›")
+}
+
 function emptyState() {
   return {
     engine: "postgresql",
@@ -599,6 +609,7 @@ if (typeof module !== "undefined" && module.exports) {
     engineShortLabel: engineShortLabel,
     engineDefaults: engineDefaults,
     dependencyInstallCommand: dependencyInstallCommand,
+    neutralizeAutoText: neutralizeAutoText,
     emptyState: emptyState,
     ingestSummary: ingestSummary,
     ingestDetails: ingestDetails,

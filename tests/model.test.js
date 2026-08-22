@@ -332,6 +332,13 @@ test("missing database clients expose exact Omarchy package commands", () => {
   assert.equal(Model.dependencyInstallCommand("postgresql", "connection refused"), "")
 })
 
+test("AutoText boundaries neutralize markup without hiding the identifier", () => {
+  const hostile = '<img src="file:///etc/passwd"> R&D > production'
+  const safe = Model.neutralizeAutoText(hostile)
+  assert.equal(safe, '‹img src="file:///etc/passwd"› R＆D › production')
+  assert.doesNotMatch(safe, /[<>&]/)
+})
+
 test("publishing surface uses the permanent plugin identity", () => {
   const root = path.join(__dirname, "..")
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8")
@@ -535,6 +542,24 @@ test("missing-client cards render a selectable console install command", () => {
   assert.match(block, /text:\s*"COPY \/ PASTE"/)
   assert.match(controller, /if \(exitCode === 127\)\s*root\.errorText = root\.missingClientError\(\)/)
   assert.match(controller, /root\.errorText = exitCode === 127\s*\? "ssh is not installed"/)
+})
+
+test("database and profile controlled labels never reach QML AutoText", () => {
+  const root = path.join(__dirname, "..")
+  const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
+  const workspace = fs.readFileSync(path.join(root, "ProfileWorkspace.qml"), "utf8")
+  const panel = fs.readFileSync(path.join(root, "Panel.qml"), "utf8")
+  const bar = fs.readFileSync(path.join(root, "BarWidget.qml"), "utf8")
+
+  assert.match(block, /text:\s*root\.identityMeta\(\)\.toUpperCase\(\)\s*\n\s*textFormat:\s*Text\.PlainText/)
+  assert.match(block, /text:\s*modelData\.schema \+ "\." \+ modelData\.relation\s*\n\s*textFormat:\s*Text\.PlainText/)
+  assert.match(block, /text:\s*root\.relationDetail\(modelData\)\s*\n\s*textFormat:\s*Text\.PlainText/)
+  assert.match(workspace, /text:\s*String\(profileCard\.modelData\.name[\s\S]*?textFormat:\s*Text\.PlainText/)
+  assert.match(workspace, /text:\s*String\(profileCard\.modelData\.database[\s\S]*?textFormat:\s*Text\.PlainText/)
+  assert.match(workspace, /text:\s*profileCard\.modelData\.sshEnabled[\s\S]*?textFormat:\s*Text\.PlainText/)
+  assert.match(panel, /Model\.neutralizeAutoText\(row\.profile\.name/)
+  assert.match(panel, /Model\.neutralizeAutoText\(row\.errorText/)
+  assert.equal((bar.match(/textFormat:\s*Text\.PlainText/g) || []).length, 2)
 })
 
 test("bar branding uses native vector Hazel marks without redistributing font software", () => {

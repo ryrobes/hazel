@@ -151,6 +151,7 @@ BarWidget {
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: button.text
+                textFormat: Text.PlainText
                 color: button.active && button.useActiveColor ? button.activeColor : button.foreground
                 font.family: button.fontFamily
                 font.pixelSize: button.fontSize
@@ -174,6 +175,7 @@ BarWidget {
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: button.text
+                textFormat: Text.PlainText
                 color: button.active && button.useActiveColor ? button.activeColor : button.foreground
                 font.family: button.fontFamily
                 font.pixelSize: button.fontSize

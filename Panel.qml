@@ -469,8 +469,11 @@ Panel {
         for (var i = 0; i < instances.length; i++) {
             var row = instances[i];
             var state = row.state;
-            var name = String(row.profile.name || row.profile.profileName || "Postgres");
-            lines.push(name + " · " + (state.connected ? state.statusLabel + " · " + state.connections.active + " active" : (row.errorText || "connecting")));
+            var name = Model.neutralizeAutoText(row.profile.name || row.profile.profileName || "Postgres");
+            var stateText = state.connected
+                ? Model.neutralizeAutoText(state.statusLabel) + " · " + state.connections.active + " active"
+                : Model.neutralizeAutoText(row.errorText || "connecting");
+            lines.push(name + " · " + stateText);
         }
         return lines.join("\n");
     }
@@ -720,6 +723,7 @@ Panel {
                                 Layout.minimumWidth: 0
                                 Layout.fillWidth: true
                                 text: root.notable.label
+                                textFormat: Text.PlainText
                                 color: root.notable.tone
                                 font.family: root.fontFamily
                                 font.pixelSize: Style.font.caption

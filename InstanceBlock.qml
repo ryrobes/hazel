@@ -284,6 +284,7 @@ BorderSurface {
                 Text {
                     Layout.fillWidth: true
                     text: root.identityMeta().toUpperCase()
+                    textFormat: Text.PlainText
                     color: root.statusTone
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -614,6 +615,7 @@ BorderSurface {
                 Layout.fillWidth: true
                 Text {
                     text: root.snapshot.maintenance.surfaceLabel
+                    textFormat: Text.PlainText
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -643,6 +645,7 @@ BorderSurface {
                     Text {
                         Layout.fillWidth: true
                         text: modelData.schema + "." + modelData.relation
+                        textFormat: Text.PlainText
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -651,6 +654,7 @@ BorderSurface {
                     }
                     Text {
                         text: root.relationDetail(modelData)
+                        textFormat: Text.PlainText
                         color: Number(modelData.deadPercent || 0) >= 25 ? root.warning : root.muted
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption

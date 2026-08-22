@@ -135,6 +135,7 @@ ColumnLayout {
                         Text {
                             Layout.fillWidth: true
                             text: String(profileCard.modelData.name || profileCard.modelData.profileName || "Postgres")
+                            textFormat: Text.PlainText
                             color: root.foreground
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.body
@@ -172,6 +173,7 @@ ColumnLayout {
                     Text {
                         Layout.fillWidth: true
                         text: String(profileCard.modelData.database || root.defaultsFor(profileCard.modelData).database) + "  ·  " + String(profileCard.modelData.user || root.defaultsFor(profileCard.modelData).user)
+                        textFormat: Text.PlainText
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -183,6 +185,7 @@ ColumnLayout {
                         text: profileCard.modelData.sshEnabled === true
                             ? "SSH  " + String(profileCard.modelData.sshUser || "") + "@" + String(profileCard.modelData.sshHost || "")
                             : String(profileCard.modelData.host || "local socket") + ":" + String(profileCard.modelData.port || root.defaultsFor(profileCard.modelData).port)
+                        textFormat: Text.PlainText
                         color: root.muted
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
