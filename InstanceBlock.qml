@@ -392,16 +392,16 @@ BorderSurface {
             Layout.fillWidth: true
             Layout.preferredHeight: Style.space(root.expanded ? 236 : 146)
             engine: root.snapshot.engine
-            transactions: root.snapshot.rates.work
-            lockWaits: root.snapshot.connections.lockWaiting
-            blocked: root.snapshot.connections.blocked
-            oldestLockWaitSeconds: root.snapshot.connections.oldestLockWaitSeconds
-            connectionsUsed: root.snapshot.connections.used
-            maxConnections: root.snapshot.connections.max
-            deadTuples: root.snapshot.maintenance.backlog
-            autovacuumWorkers: root.snapshot.maintenance.autoWorkerCount
-            vacuumWorkers: root.snapshot.maintenance.workerCount
-            runningQueries: root.snapshot.connections.active
+            transactions: Number(root.snapshot.rates.work || 0)
+            lockWaits: Number(root.snapshot.connections.lockWaiting || 0)
+            blocked: Number(root.snapshot.connections.blocked || 0)
+            oldestLockWaitSeconds: Number(root.snapshot.connections.oldestLockWaitSeconds || 0)
+            connectionsUsed: Number(root.snapshot.connections.used || 0)
+            maxConnections: Number(root.snapshot.connections.max || 0)
+            deadTuples: Number(root.snapshot.maintenance.backlog || 0)
+            autovacuumWorkers: Number(root.snapshot.maintenance.autoWorkerCount || 0)
+            vacuumWorkers: Number(root.snapshot.maintenance.workerCount || 0)
+            runningQueries: Number(root.snapshot.connections.active || 0)
             activeMerges: root.snapshot.maintenance.activeMerges || 0
             pendingMutations: root.snapshot.maintenance.pendingMutations || 0
             activeParts: root.snapshot.maintenance.activeParts || 0

@@ -19,8 +19,8 @@ WITH status_values AS (
 ), process_values AS (
   SELECT
     COUNT(*) AS used,
-    SUM(COMMAND <> 'Sleep') AS active,
-    SUM(COMMAND = 'Sleep') AS idle,
+    COALESCE(SUM(COMMAND <> 'Sleep'), 0) AS active,
+    COALESCE(SUM(COMMAND = 'Sleep'), 0) AS idle,
     COALESCE(MAX(CASE WHEN COMMAND <> 'Sleep' THEN TIME ELSE 0 END), 0) AS oldest_query_seconds
   FROM performance_schema.processlist
   WHERE ID <> CONNECTION_ID()
@@ -113,8 +113,8 @@ SELECT JSON_OBJECT(
     'logBytes', status_values.redo_bytes,
     'bufferWaitFree', status_values.buffer_wait_free,
     'diskTempTables', status_values.disk_temp_tables,
-    'statsReset', DATE_FORMAT(DATE_SUB(NOW(), INTERVAL status_values.uptime_seconds SECOND), '%Y-%m-%dT%H:%i:%s'),
-    'logStatsReset', DATE_FORMAT(DATE_SUB(NOW(), INTERVAL status_values.uptime_seconds SECOND), '%Y-%m-%dT%H:%i:%s')
+    'statsReset', NULL,
+    'logStatsReset', NULL
   ),
   'maintenance', JSON_OBJECT(
     'kind', 'purge',

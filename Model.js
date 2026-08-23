@@ -29,6 +29,33 @@ function isClickHouse(engine) {
   return engineFamily(engine) === "clickhouse"
 }
 
+function internalTunnelPort(profileId, profiles, preferredPort) {
+  var source = safeArray(profiles)
+  var wanted = String(profileId || "hazel")
+  var preferred = Math.floor(finiteNumber(preferredPort, 0))
+
+  function occupied(port) {
+    for (var i = 0; i < source.length; i++) {
+      var profile = safeObject(source[i])
+      if (String(profile.id || "") !== wanted && Math.floor(finiteNumber(profile.sshLocalPort, 0)) === port)
+        return true
+    }
+    return false
+  }
+
+  if (preferred >= 56000 && preferred < 61000 && !occupied(preferred)) return preferred
+
+  var hash = 0
+  for (var index = 0; index < wanted.length; index++)
+    hash = ((hash * 31) + wanted.charCodeAt(index)) >>> 0
+  var start = hash % 5000
+  for (var offset = 0; offset < 5000; offset++) {
+    var candidate = 56000 + ((start + offset) % 5000)
+    if (!occupied(candidate)) return candidate
+  }
+  return 0
+}
+
 function engineLabel(engine) {
   var value = String(engine || "postgresql").toLowerCase()
   if (value === "mariadb") return "MariaDB"
@@ -392,9 +419,7 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.pressures.contention = isClickHouse(next.engine) ? 0 : clamp(Math.max(waitingShare, next.connections.blocked * 0.5), 0, 1)
   next.pressures.connections = isClickHouse(next.engine) ? next.capacityPercent / 100 : next.connectionPercent / 100
   next.pressures.mvcc = next.deadTuplePercent / 100
-  next.pressures.maintenance = isClickHouse(next.engine)
-    ? clamp(finiteNumber(next.maintenance.backlog, 0) / Math.max(1, finiteNumber(next.maintenance.backlog, 0)), 0, 1)
-    : (isMysqlFamily(next.engine) ? 0 : next.pressures.mvcc)
+  next.pressures.maintenance = isMysqlFamily(next.engine) ? 0 : next.pressures.mvcc
 
   var previousWork = previous.histories.work || previous.histories.transactions
   var previousLog = previous.histories.logBytes || previous.histories.walBytes
@@ -402,6 +427,10 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.histories.work = appendHistory(previousWork, timestamp, next.rates.work, policy)
   next.histories.logBytes = appendHistory(previousLog, timestamp, next.rates.logBytes, policy)
   next.histories.maintenanceBacklog = appendHistory(previousBacklog, timestamp, next.maintenance.backlog, policy)
+  if (isClickHouse(next.engine)) {
+    var maintenanceHigh = historyStats(next.histories.maintenanceBacklog).high
+    next.pressures.maintenance = clamp(finiteNumber(next.maintenance.backlog, 0) / Math.max(1, maintenanceHigh), 0, 1)
+  }
   next.histories.transactions = next.histories.work
   next.histories.walBytes = next.histories.logBytes
   next.histories.active = appendHistory(previous.histories.active, timestamp, next.connections.active, policy)
@@ -605,6 +634,7 @@ if (typeof module !== "undefined" && module.exports) {
     engineFamily: engineFamily,
     isMysqlFamily: isMysqlFamily,
     isClickHouse: isClickHouse,
+    internalTunnelPort: internalTunnelPort,
     engineLabel: engineLabel,
     engineShortLabel: engineShortLabel,
     engineDefaults: engineDefaults,

@@ -88,8 +88,11 @@ Panel {
         var stored = value.profiles;
         if (stored && Number(stored.length) > 0) {
             var profiles = [];
-            for (var i = 0; i < stored.length; i++)
-                profiles.push(copyProfile(stored[i]));
+            for (var i = 0; i < stored.length; i++) {
+                var profile = copyProfile(stored[i]);
+                profile.sshLocalPort = Model.internalTunnelPort(profile.id, profiles, profile.sshLocalPort);
+                profiles.push(profile);
+            }
             return profiles;
         }
         return value.configured === true ? [legacyProfile()] : [];
@@ -348,14 +351,6 @@ Panel {
         connectionSetup.load(profile, controller ? controller.passwordRemembered : false);
     }
 
-    function internalTunnelPort(profileId) {
-        var text = String(profileId || "hazel");
-        var hash = 0;
-        for (var i = 0; i < text.length; i++)
-            hash = ((hash * 31) + text.charCodeAt(i)) >>> 0;
-        return 56000 + (hash % 5000);
-    }
-
     function addProfile() {
         configuring = true;
         editingProfile = true;
@@ -420,7 +415,7 @@ Panel {
         for (var i = 0; i < profiles.length; i++) {
             if (String(profiles[i].id || "") === String(profile.id)) {
                 profile.enabled = previous.enabled === undefined ? true : previous.enabled === true;
-                profile.sshLocalPort = Number(previous.sshLocalPort || internalTunnelPort(profile.id));
+                profile.sshLocalPort = Model.internalTunnelPort(profile.id, profiles, previous.sshLocalPort);
                 profiles[i] = profile;
                 replaced = true;
                 break;
@@ -428,7 +423,7 @@ Panel {
         }
         if (!replaced) {
             profile.enabled = true;
-            profile.sshLocalPort = internalTunnelPort(profile.id);
+            profile.sshLocalPort = Model.internalTunnelPort(profile.id, profiles, 0);
             profiles.push(profile);
         }
         persistSettings(flatProfileSettings(profile, profiles));

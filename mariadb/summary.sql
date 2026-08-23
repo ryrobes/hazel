@@ -110,8 +110,8 @@ SELECT JSON_OBJECT(
     'logBytes', COALESCE(status_values.redo_bytes, 0),
     'bufferWaitFree', COALESCE(status_values.buffer_wait_free, 0),
     'diskTempTables', COALESCE(status_values.disk_temp_tables, 0),
-    'statsReset', DATE_FORMAT(DATE_SUB(NOW(), INTERVAL status_values.uptime_seconds SECOND), '%Y-%m-%dT%H:%i:%s'),
-    'logStatsReset', DATE_FORMAT(DATE_SUB(NOW(), INTERVAL status_values.uptime_seconds SECOND), '%Y-%m-%dT%H:%i:%s')
+    'statsReset', NULL,
+    'logStatsReset', NULL
   ),
   'maintenance', JSON_OBJECT(
     'kind', 'purge',

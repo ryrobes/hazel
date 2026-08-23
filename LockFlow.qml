@@ -24,7 +24,9 @@ BorderSurface {
 
     function shortTarget(edge) {
         var target = String(edge && edge.lockTarget ? edge.lockTarget : (edge && edge.waitEvent ? edge.waitEvent : "lock"));
-        return target.length > 24 ? target.slice(0, 21) + "…" : target;
+        var mode = String(edge && edge.lockMode ? edge.lockMode : "");
+        var label = mode !== "" ? mode + " · " + target : target;
+        return label.length > 34 ? label.slice(0, 31) + "…" : label;
     }
 
     function repaint() {

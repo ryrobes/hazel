@@ -131,11 +131,13 @@ BorderSurface {
                     for (var x = -step + offset; x < width; x += step)
                         ctx.fillRect(x, centerY + 4, 14, 6);
 
-                    var progress = Math.max(0, Math.min(1, Number(job.progress || 0)));
-                    ctx.globalAlpha = 0.18;
-                    ctx.fillRect(5, centerY - 2, width - 10, 2);
-                    ctx.globalAlpha = 0.9;
-                    ctx.fillRect(5, centerY - 2, (width - 10) * progress, 2);
+                    if (job.kind === "merge") {
+                        var progress = Math.max(0, Math.min(1, Number(job.progress || 0)));
+                        ctx.globalAlpha = 0.18;
+                        ctx.fillRect(5, centerY - 2, width - 10, 2);
+                        ctx.globalAlpha = 0.9;
+                        ctx.fillRect(5, centerY - 2, (width - 10) * progress, 2);
+                    }
                     ctx.globalAlpha = 1;
                     ctx.fillStyle = String(job.failed ? root.urgent : root.foreground);
                     ctx.textAlign = "left";

@@ -143,6 +143,21 @@ test("ClickHouse uses query flow, memory capacity, and merge debt without lock o
   assert.match(Model.barLabel(second, "Work", false), /q\/s/)
   assert.match(Model.barLabel(second, "Adaptive", false), /mem/)
   assert.match(Model.barLabel(second, "Maintenance", false), /jobs/)
+
+  const third = Model.ingestSummary(second, clickhouseSummary(11000, {
+    workTotal: 175, rowsReturned: 1700, rowsModified: 110, logBytes: 17680
+  }, {}, { backlog: 3 }), 120)
+  assert.equal(third.pressures.maintenance, 3 / 7)
+})
+
+test("SSH tunnel ports probe past collisions while preserving safe assignments", () => {
+  const first = Model.internalTunnelPort("profile-a", [], 0)
+  const profiles = [{ id: "another-profile", sshLocalPort: first }]
+  const second = Model.internalTunnelPort("profile-a", profiles, first)
+  assert.ok(first >= 56000 && first < 61000)
+  assert.ok(second >= 56000 && second < 61000)
+  assert.notEqual(second, first)
+  assert.equal(Model.internalTunnelPort("profile-a", [], first), first)
 })
 
 test("derives rates from consecutive counter snapshots", () => {
@@ -372,6 +387,8 @@ test("enabled named profiles own collectors, theme tone, and optional SSH transp
   assert.match(workspace, /profileEnabledChanged/)
   assert.doesNotMatch(workspace, /text:\s*"Use"/)
   assert.match(controller, /StrictHostKeyChecking=accept-new/)
+  assert.match(panel, /profile\.sshLocalPort = Model\.internalTunnelPort\(profile\.id, profiles, profile\.sshLocalPort\)/)
+  assert.match(panel, /Model\.internalTunnelPort\(profile\.id, profiles, previous\.sshLocalPort\)/)
   assert.match(controller, /ExitOnForwardFailure=yes/)
   assert.match(controller, /preserveExisting/)
   assert.match(controller, /state = Model\.emptyState\(\)/)
@@ -409,6 +426,7 @@ test("profile expansion is exclusive, additive, and card-driven", () => {
   assert.match(queries, /root\.activity\.length \+ " CAPTURED"/)
   assert.match(queries, /visibleQueries:\s*firstRows\(activity, 3\)/)
   assert.match(locks, /visibleEdges:\s*firstRows\(edges, 3\)/)
+  assert.match(locks, /mode \+ " · " \+ target/)
   assert.doesNotMatch(queries + locks, /Array\.isArray/)
 })
 
@@ -424,6 +442,13 @@ test("refreshes update stable instance roles in place and use a restrained wash"
   assert.match(block, /id:\s*refreshWash/)
   assert.match(block, /from:\s*0\.045\s*\n\s*to:\s*0/)
   assert.match(block, /Behavior on cardHeight/)
+})
+
+test("duplicate bar instances continuously recover collector leadership", () => {
+  const root = path.join(__dirname, "..")
+  const bar = fs.readFileSync(path.join(root, "BarWidget.qml"), "utf8")
+  assert.match(bar, /id:\s*leaderElection[\s\S]*?repeat:\s*true/)
+  assert.match(bar, /sourcePanel = leader !== root && leader && leader\.panelItem \? leader\.panelItem : null/)
 })
 
 test("behavior memory retains 24 hours and exposes honest viewport lenses", () => {
@@ -528,12 +553,29 @@ test("collector secrets stay out of argv and database streams are bounded", () =
   assert.match(controller, /environment\.PGPASSWORD = sessionPassword/)
   assert.match(controller, /environment\.MYSQL_PWD = sessionPassword/)
   assert.match(controller, /environment\.CLICKHOUSE_PASSWORD = sessionPassword/)
+  assert.match(controller, /property int credentialGeneration:\s*0/)
+  assert.match(controller, /property bool secretLookupStopping:\s*false/)
+  assert.match(controller, /secretLookupGeneration !== root\.credentialGeneration/)
+  assert.match(controller, /function invalidateCredentialLookup\(\)/)
   assert.equal((controller.match(/stdout:\s*BoundedLineReader/g) || []).length, 1)
   assert.equal((controller.match(/stderr:\s*BoundedLineReader/g) || []).length, 2)
   assert.match(reader, /splitMarker:\s*""/)
   assert.match(reader, /pending\.length \+ segment\.length > maximumLineLength/)
   assert.match(reader, /discardingOversizedLine = true/)
   assert.match(reader, /readonly property int bufferedLength: pending\.length/)
+})
+
+test("small visual primitives repaint completely and avoid fake mutation progress", () => {
+  const root = path.join(__dirname, "..")
+  const sparkline = fs.readFileSync(path.join(root, "Sparkline.qml"), "utf8")
+  const background = fs.readFileSync(path.join(root, "BackgroundWork.qml"), "utf8")
+  const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
+
+  assert.match(sparkline, /onGridColorChanged:\s*canvas\.requestPaint\(\)/)
+  assert.match(sparkline, /onMaximumChanged:\s*canvas\.requestPaint\(\)/)
+  assert.match(sparkline, /if \(points\.length === 1\)/)
+  assert.match(background, /if \(job\.kind === "merge"\)/)
+  assert.match(block, /runningQueries:\s*Number\(root\.snapshot\.connections\.active \|\| 0\)/)
 })
 
 test("profile cards keep only the accent rail and mark their database identity", () => {
@@ -644,6 +686,8 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   assert.match(details, /'queryText'/)
   assert.match(details, /AND state = 'active'/)
   assert.match(details, /regexp_replace\(query/)
+  assert.ok(details.includes("E'\\\\$\\\\$.*\\\\$\\\\$'"))
+  assert.doesNotMatch(details, /indexes_processed|indexes_total|num_dead_item_ids/)
   assert.match(controller, /environment\.PGAPPNAME = "hazel-monitor"/)
   assert.match(summarySql, /application_name IS DISTINCT FROM 'hazel-monitor'/)
   assert.match(details, /application_name IS DISTINCT FROM 'hazel-monitor'/)

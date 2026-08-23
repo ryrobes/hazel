@@ -129,8 +129,8 @@ SELECT
         event_values.selected_bytes,
         event_values.inserted_bytes,
         event_values.failed_queries,
-        formatDateTime(now() - toIntervalSecond(uptime()), '%FT%T'),
-        formatDateTime(now() - toIntervalSecond(uptime()), '%FT%T')
+        CAST(NULL AS Nullable(String)),
+        CAST(NULL AS Nullable(String))
     ) AS Tuple(
         workTotal UInt64,
         rowsReturned UInt64,
@@ -138,8 +138,8 @@ SELECT
         blocksRead UInt64,
         logBytes UInt64,
         failedQueries UInt64,
-        statsReset String,
-        logStatsReset String
+        statsReset Nullable(String),
+        logStatsReset Nullable(String)
     )) AS counters,
     CAST((
         'merge',

@@ -200,7 +200,6 @@ SELECT
     relation_values.relations AS relations,
     CAST([] AS Array(String)) AS blocking,
     background_values.background AS background,
-    background_values.background AS maintenance,
     CAST([] AS Array(String)) AS vacuum
 FROM activity_values
 CROSS JOIN relation_values

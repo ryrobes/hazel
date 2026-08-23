@@ -25,6 +25,9 @@ Item {
     property bool keyringBusy: false
     property bool tunnelReady: false
     property string tunnelErrorText: ""
+    property int credentialGeneration: 0
+    property int secretLookupGeneration: -1
+    property bool secretLookupStopping: false
     readonly property bool connectionConfigured: booleanSetting("configured", false)
     readonly property string engineName: normalizedEngine(stringSetting("engine", "postgresql"))
     readonly property string engineFamily: Model.engineFamily(engineName)
@@ -94,14 +97,24 @@ Item {
         return attributes.concat(["profile", profileId, "host", hostName || "local-socket", "port", String(port), "database", databaseName, "user", userName]);
     }
 
+    function invalidateCredentialLookup() {
+        credentialGeneration++;
+        if (secretLookup.running) {
+            secretLookupStopping = true;
+            secretLookup.running = false;
+        }
+    }
+
     function beginCredentialLookup() {
         if (!connectionConfigured) {
+            invalidateCredentialLookup();
             credentialsReady = false;
             passwordRemembered = false;
             sessionPassword = "";
             return ;
         }
         if (!rememberPassword) {
+            invalidateCredentialLookup();
             credentialsReady = true;
             passwordRemembered = false;
             sessionPassword = "";
@@ -110,8 +123,12 @@ Item {
                 ensureProcess();
             return ;
         }
+        if (secretLookupStopping) {
+            credentialReloadTimer.restart();
+            return;
+        }
         if (secretLookup.running) {
-            secretLookup.running = false;
+            invalidateCredentialLookup();
             credentialReloadTimer.restart();
             return ;
         }
@@ -119,15 +136,16 @@ Item {
         passwordRemembered = false;
         sessionPassword = "";
         keyringBusy = true;
+        credentialGeneration++;
+        secretLookupGeneration = credentialGeneration;
         secretLookup.command = ["secret-tool", "lookup"].concat(secretAttributes());
         secretLookup.running = true;
     }
 
     function applyCredential(password, remember, preserveExisting) {
         var value = String(password || "");
-        if (secretLookup.running)
-            secretLookup.running = false;
         credentialReloadTimer.stop();
+        invalidateCredentialLookup();
         if (value === "" && preserveExisting) {
             credentialsReady = true;
             if (remember && sessionPassword !== "") {
@@ -145,7 +163,7 @@ Item {
             return ;
         }
         if (value === "" && remember) {
-            beginCredentialLookup();
+            credentialReloadTimer.restart();
             return ;
         }
 
@@ -166,6 +184,8 @@ Item {
     }
 
     function forgetCredential() {
+        credentialReloadTimer.stop();
+        invalidateCredentialLookup();
         sessionPassword = "";
         passwordRemembered = false;
         credentialsReady = true;
@@ -454,6 +474,8 @@ Item {
             credentialReloadTimer.restart();
             summaryTimer.restart();
         } else {
+            invalidateCredentialLookup();
+            keyringBusy = false;
             credentialReloadTimer.stop();
             reconnectTimer.stop();
             retryTimer.stop();
@@ -474,6 +496,7 @@ Item {
     }
     onConnectionKeyChanged: {
         if (active) {
+            invalidateCredentialLookup();
             state = Model.emptyState();
             oneShotSucceeded = false;
             if (psqlProc.running)
@@ -635,6 +658,12 @@ Item {
             waitForEnd: true
         }
         onExited: function(exitCode) {
+            root.secretLookupStopping = false;
+            if (root.secretLookupGeneration !== root.credentialGeneration) {
+                root.secretLookupGeneration = -1;
+                return;
+            }
+            root.secretLookupGeneration = -1;
             root.keyringBusy = false;
             var value = exitCode === 0 ? String(secretLookupOutput.text || "").replace(/[\r\n]+$/, "") : "";
             root.sessionPassword = value;

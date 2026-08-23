@@ -35,7 +35,7 @@ case "$variant" in
     ;;
 esac
 
-root_mysql=(docker exec -e MYSQL_PWD=hazel-root-dev-only "$container" "$client" -uroot -Dhazel --batch --raw --skip-column-names --silent)
+root_mysql=(docker exec -i -e MYSQL_PWD=hazel-root-dev-only "$container" "$client" -uroot -Dhazel --batch --raw --skip-column-names --silent)
 monitor_mysql=(docker exec -e MYSQL_PWD=hazel-dev-only "$container" "$client" -uhazel -Dhazel --batch --raw --skip-column-names --silent)
 
 cleanup() {
@@ -75,6 +75,8 @@ jq -e --arg engine "$variant" '
   (.connections.max > 0) and
   (.counters.workTotal >= 0) and
   (.counters.logBytes >= 0) and
+  .counters.statsReset == null and
+  .counters.logStatsReset == null and
   .maintenance.kind == "purge" and
   .maintenance.backlogLabel == "PURGE DEBT" and
   (.maintenance.backlog >= 0) and
@@ -131,13 +133,36 @@ cleanup
 blocker_job=""
 waiter_job=""
 
-baseline=$("${monitor_mysql[@]}" -e "SELECT COUNT FROM information_schema.INNODB_METRICS WHERE NAME='trx_rseg_history_len'")
-"${root_mysql[@]}" -e "START TRANSACTION WITH CONSISTENT SNAPSHOT; SELECT COUNT(*) FROM accounts; SELECT SLEEP(5); COMMIT" >/dev/null 2>&1 &
-reader_job=$!
+remaining_transactions=1
 for _ in {1..50}; do
-  [[ "$("${root_mysql[@]}" -e "SELECT COUNT(*) FROM information_schema.INNODB_TRX")" -ge 1 ]] && break
+  remaining_transactions=$("${root_mysql[@]}" -e "SELECT COUNT(*) FROM information_schema.INNODB_TRX")
+  [[ "$remaining_transactions" -eq 0 ]] && break
   sleep 0.1
 done
+if [[ "$remaining_transactions" -ne 0 ]]; then
+  echo "Timed out waiting for the $variant lock fixture to fully roll back" >&2
+  exit 1
+fi
+
+baseline=$("${monitor_mysql[@]}" -e "SELECT COUNT FROM information_schema.INNODB_METRICS WHERE NAME='trx_rseg_history_len'")
+"${root_mysql[@]}" -e "START TRANSACTION WITH CONSISTENT SNAPSHOT; SELECT COUNT(*) FROM accounts; SELECT SLEEP(5) AS hazel_purge_reader; COMMIT" >/dev/null 2>&1 &
+reader_job=$!
+reader_ready=0
+for _ in {1..50}; do
+  reader_ready=$("${root_mysql[@]}" -e "
+    SELECT COUNT(*)
+    FROM information_schema.INNODB_TRX AS transactions
+    JOIN information_schema.PROCESSLIST AS processes
+      ON processes.ID = transactions.trx_mysql_thread_id
+    WHERE COALESCE(processes.INFO, '') LIKE '%hazel_purge_reader%'
+  ")
+  [[ "$reader_ready" -ge 1 ]] && break
+  sleep 0.1
+done
+if [[ "$reader_ready" -lt 1 ]]; then
+  echo "Timed out waiting for the $variant held-snapshot fixture" >&2
+  exit 1
+fi
 updates=""
 for value in $(seq 1 100); do
   updates+="UPDATE accounts SET balance = 1000 + $value WHERE id = 1;"

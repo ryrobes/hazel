@@ -13,7 +13,13 @@ WITH activity_rows AS (
     'queryText', left(
       regexp_replace(
         regexp_replace(
-          regexp_replace(query, E'[\\n\\r\\t ]+', ' ', 'g'),
+          regexp_replace(
+            regexp_replace(
+              regexp_replace(query, E'[\\n\\r\\t ]+', ' ', 'g'),
+              E'\\$[A-Za-z_][A-Za-z0-9_]*\\$.*\\$[A-Za-z_][A-Za-z0-9_]*\\$', '$tag$?$tag$', 'g'
+            ),
+            E'\\$\\$.*\\$\\$', '$$?$$', 'g'
+          ),
           $$'([^']|'')*'$$, '''?''', 'g'
         ),
         $$\m[0-9]+(\.[0-9]+)?\M$$, '?', 'g'
@@ -107,23 +113,6 @@ WITH activity_rows AS (
     AND blocked.application_name IS DISTINCT FROM 'hazel-monitor'
   ORDER BY blocked.query_start ASC NULLS LAST
   LIMIT 12
-), vacuum_rows AS (
-  SELECT jsonb_build_object(
-    'pid', progress.pid,
-    'relation', format('%I.%I', namespace.nspname, relation.relname),
-    'phase', progress.phase,
-    'heapBlocksTotal', progress.heap_blks_total,
-    'heapBlocksScanned', progress.heap_blks_scanned,
-    'heapBlocksVacuumed', progress.heap_blks_vacuumed,
-    'indexesProcessed', progress.indexes_processed,
-    'indexesTotal', progress.indexes_total,
-    'deadTuples', progress.num_dead_item_ids
-  ) AS item
-  FROM pg_stat_progress_vacuum AS progress
-  JOIN pg_class AS relation ON relation.oid = progress.relid
-  JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-  ORDER BY progress.pid
-  LIMIT 6
 )
 SELECT jsonb_build_object(
   'schema', 1,
@@ -132,5 +121,5 @@ SELECT jsonb_build_object(
   'activity', coalesce((SELECT jsonb_agg(item) FROM activity_rows), '[]'::jsonb),
   'relations', coalesce((SELECT jsonb_agg(item) FROM relation_rows), '[]'::jsonb),
   'blocking', coalesce((SELECT jsonb_agg(item) FROM blocking_rows), '[]'::jsonb),
-  'vacuum', coalesce((SELECT jsonb_agg(item) FROM vacuum_rows), '[]'::jsonb)
+  'vacuum', '[]'::jsonb
 );

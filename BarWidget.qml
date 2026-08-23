@@ -75,7 +75,7 @@ BarWidget {
         panelLoader.item.settings = root.settings;
         var leader = root.leaderWidget();
         panelLoader.item.collectorActive = leader === root;
-        panelLoader.item.sourcePanel = leader && leader.panelItem ? leader.panelItem : null;
+        panelLoader.item.sourcePanel = leader !== root && leader && leader.panelItem ? leader.panelItem : null;
         leaderElection.restart();
     }
 
@@ -100,15 +100,15 @@ BarWidget {
     Timer {
         id: leaderElection
 
-        interval: 250
-        repeat: false
+        interval: 1000
+        repeat: true
         onTriggered: {
             if (!panelLoader.item)
                 return ;
 
             var leader = root.leaderWidget();
             panelLoader.item.collectorActive = leader === root;
-            panelLoader.item.sourcePanel = leader && leader.panelItem ? leader.panelItem : null;
+            panelLoader.item.sourcePanel = leader !== root && leader && leader.panelItem ? leader.panelItem : null;
         }
     }
 

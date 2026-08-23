@@ -45,6 +45,8 @@ jq -e '
   .capabilities.mutations == 1 and
   (.connections.max > 0) and
   (.counters.workTotal >= 0) and
+  .counters.statsReset == null and
+  .counters.logStatsReset == null and
   (.capacity.memoryUsed > 0) and
   (.capacity.memoryMax > .capacity.memoryUsed) and
   .maintenance.kind == "merge" and
@@ -120,6 +122,7 @@ jq -e '
   (all(.activity[]; (.queryText | contains("100000000000") or contains("97")) | not)) and
   (.relations | any(.relation == "hazel_clickhouse_test" and .parts >= 3 and .rows >= 450000)) and
   (.background | any(.kind == "mutation" and .table == "hazel_clickhouse_test" and .partsToDo >= 1)) and
+  (has("maintenance") | not) and
   (all(.background[]; ((.label + " " + .error) | contains("hazel-secret-4242") or contains("4242")) | not)) and
   .blocking == []
 ' <<<"$details" >/dev/null

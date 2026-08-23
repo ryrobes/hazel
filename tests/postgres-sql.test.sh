@@ -9,6 +9,7 @@ log_file="$test_dir/postgres.log"
 port=55439
 blocker_job=""
 waiter_job=""
+literal_job=""
 
 mkdir -p "$socket_dir"
 
@@ -18,6 +19,9 @@ cleanup() {
   fi
   if [[ -n "$waiter_job" ]]; then
     kill "$waiter_job" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$literal_job" ]]; then
+    kill "$literal_job" >/dev/null 2>&1 || true
   fi
   if [[ -d "$data_dir" ]]; then
     pg_ctl -D "$data_dir" -m immediate stop >/dev/null 2>&1 || true
@@ -73,6 +77,18 @@ for _ in {1..40}; do
   sleep 0.1
 done
 
+PGAPPNAME=hazel-test-literal "${psql_base[@]}" -d hazel_test >/dev/null 2>&1 <<'SQL' &
+SELECT pg_sleep(30), $$dollar-secret$$, $hazel$tagged-secret$hazel$;
+SQL
+literal_job=$!
+
+for _ in {1..40}; do
+  if [[ $("${psql_base[@]}" -d hazel_test -c "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'hazel-test-literal' AND state = 'active'") == "1" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+
 details=$("${psql_base[@]}" -d hazel_test -f "$repo_dir/postgres/details.sql")
 
 jq -e '
@@ -100,7 +116,7 @@ jq -e '
   (.activity | length >= 2) and
   (all(.activity[]; .state == "active")) and
   (any(.activity[]; .queryText | contains("lock_probe"))) and
-  (all(.activity[]; (.queryText | contains("held-secret") or contains("waiting-secret")) | not)) and
+  (all(.activity[]; (.queryText | contains("held-secret") or contains("waiting-secret") or contains("dollar-secret") or contains("tagged-secret")) | not)) and
   (.relations | type == "array") and
   (.blocking | type == "array") and
   (.blocking | length >= 1) and
@@ -109,11 +125,13 @@ jq -e '
   (.vacuum | type == "array")
 ' <<<"$details" >/dev/null
 
-"${psql_base[@]}" -d hazel_test -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('hazel-test-blocker', 'hazel-test-waiter')" >/dev/null
+"${psql_base[@]}" -d hazel_test -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name IN ('hazel-test-blocker', 'hazel-test-waiter', 'hazel-test-literal')" >/dev/null
 wait "$blocker_job" >/dev/null 2>&1 || true
 blocker_job=""
 wait "$waiter_job" >/dev/null 2>&1 || true
 waiter_job=""
+wait "$literal_job" >/dev/null 2>&1 || true
+literal_job=""
 
 printf 'Hazel PostgreSQL SQL snapshots passed on PostgreSQL %s\n' \
   "$("${psql_base[@]}" -d hazel_test -c 'show server_version')"

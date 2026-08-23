@@ -30,6 +30,8 @@ Item {
     onHistoryChanged: canvas.requestPaint()
     onLineColorChanged: canvas.requestPaint()
     onFillColorChanged: canvas.requestPaint()
+    onGridColorChanged: canvas.requestPaint()
+    onMaximumChanged: canvas.requestPaint()
     onWidthChanged: canvas.requestPaint()
     onHeightChanged: canvas.requestPaint()
 
@@ -58,6 +60,15 @@ Item {
             var maxValue = root.observedMaximum();
             var pad = 2;
             var usableHeight = Math.max(1, height - pad * 2);
+            if (points.length === 1) {
+                var singleFraction = Math.max(0, Math.min(1, Number(points[0].value) / maxValue));
+                var singleY = root.mirrored ? pad + singleFraction * usableHeight : height - pad - singleFraction * usableHeight;
+                ctx.beginPath();
+                ctx.arc(width - pad - 1, singleY, Math.max(1.5, root.lineWidth), 0, Math.PI * 2);
+                ctx.fillStyle = String(root.lineColor);
+                ctx.fill();
+                return;
+            }
             ctx.beginPath();
             ctx.moveTo(points.length <= 1 ? width : 0, root.mirrored ? 0 : height);
             for (var i = 0; i < points.length; i++) {
