@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-container="hazel-postgres16-compat-$$"
+container="hazel-postgres11-compat-$$"
 
 cleanup() {
   docker stop "$container" >/dev/null 2>&1 || true
@@ -13,7 +13,7 @@ docker run -d --rm --name "$container" \
   -e POSTGRES_DB=postgres \
   -e POSTGRES_USER=hazel \
   -e POSTGRES_PASSWORD=hazel-dev-only \
-  postgres:16 >/dev/null
+  postgres:11 >/dev/null
 
 ready=0
 for _ in {1..120}; do
@@ -25,7 +25,7 @@ for _ in {1..120}; do
   sleep 0.5
 done
 if [[ "$ready" -ne 1 ]]; then
-  echo "PostgreSQL 16 compatibility container did not become ready" >&2
+  echo "PostgreSQL 11 compatibility container did not become ready" >&2
   exit 1
 fi
 
@@ -34,12 +34,11 @@ details=$(docker exec -i "$container" psql -X -w -qAt -U hazel -d postgres < "$r
 
 jq -e '
   .kind == "summary" and
-  (.identity.version | startswith("16.")) and
+  (.identity.version | startswith("11.")) and
   (.counters.walBytes | type == "number") and
-  (.counters.walRecords | type == "number") and
-  (.counters.walFpi | type == "number") and
-  (.counters.walStatsReset | type == "string")
+  .counters.walRecords == null and
+  .mvcc.vacuumWorkers == 0
 ' <<<"$summary" >/dev/null
 jq -e '.kind == "details" and .vacuum == []' <<<"$details" >/dev/null
 
-printf 'Hazel PostgreSQL compatibility snapshots passed on PostgreSQL 16\n'
+printf 'Hazel PostgreSQL compatibility snapshots passed on PostgreSQL 11\n'

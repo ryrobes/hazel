@@ -117,7 +117,7 @@ Hazel-specific connection files are required.
 ## Requirements
 
 - Omarchy 4.0 or newer
-- `postgresql-libs` (`psql`) for PostgreSQL profiles
+- `postgresql-libs` (`psql`) for PostgreSQL 11+ profiles
 - `mariadb-clients` (`mariadb`) for MySQL, MariaDB, and Percona profiles
 - `clickhouse` (`clickhouse client`) for ClickHouse profiles
 - `mssql-tools` (`sqlcmd`, from the AUR) for SQL Server profiles
@@ -228,6 +228,7 @@ tests/credential-race.test.sh
 tests/controller-queue.test.sh
 tests/timeout-state.test.sh
 tests/postgres-sql.test.sh
+tests/postgres11-sql.test.sh
 tests/postgres16-sql.test.sh
 tests/mysql-sql.test.sh
 tests/mariadb-sql.test.sh
