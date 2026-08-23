@@ -86,6 +86,35 @@ function clickhouseSummary(at, counters = {}, connections = {}, maintenance = {}
   }
 }
 
+function sqlserverSummary(at, counters = {}, connections = {}, maintenance = {}, capacity = {}) {
+  return {
+    kind: "summary",
+    engine: "sqlserver",
+    collectedAtMs: at,
+    identity: { database: "hazel", user: "hazel", version: "16.0.4265.3", family: "sqlserver", inRecovery: false },
+    capabilities: { fullStats: true, dataLocks: true },
+    connections: Object.assign({
+      used: 4, max: 704, active: 1, idle: 3, idleInTransaction: 0,
+      waiting: 0, lockWaiting: 0, blocked: 0, oldestLockWaitSeconds: 0,
+      oldestXactSeconds: 0, oldestIdleXactSeconds: 0, oldestQuerySeconds: 1
+    }, connections),
+    counters: Object.assign({
+      workTotal: 100, rowsReturned: 0, rowsModified: 0,
+      blocksRead: 100, blocksHit: 9900, logBytes: 10000,
+      statsReset: "2026-08-22T00:00:00", logStatsReset: "2026-08-22T00:00:00"
+    }, counters),
+    maintenance: Object.assign({
+      kind: "log", backlogLabel: "LOG USED", surfaceLabel: "TABLE PRESSURE",
+      backlog: 10 * 1024 * 1024, logUsedPercent: 10, logReuseWait: "NOTHING"
+    }, maintenance),
+    capacity: Object.assign({
+      memoryUsed: 50, memoryMax: 704, workersUsed: 50, workersMax: 704,
+      logUsed: 10 * 1024 * 1024, logTotal: 100 * 1024 * 1024
+    }, capacity),
+    replication: { replicaCount: 0, maxByteLag: 0 }
+  }
+}
+
 test("normalizes MySQL work, redo, and purge debt without PostgreSQL vocabulary", () => {
   const first = Model.ingestSummary(Model.emptyState(), mysqlSummary(1000), 120)
   const second = Model.ingestSummary(first, mysqlSummary(6000, {
@@ -148,6 +177,34 @@ test("ClickHouse uses query flow, memory capacity, and merge debt without lock o
     workTotal: 175, rowsReturned: 1700, rowsModified: 110, logBytes: 17680
   }, {}, { backlog: 3 }), 120)
   assert.equal(third.pressures.maintenance, 3 / 7)
+})
+
+test("SQL Server uses batch flow, waiting tasks, worker occupancy, and transaction-log pressure", () => {
+  const first = Model.ingestSummary(Model.emptyState(), sqlserverSummary(1000), 120)
+  const second = Model.ingestSummary(first, sqlserverSummary(6000, {
+    workTotal: 150, logBytes: 15120
+  }, { active: 2, waiting: 1 }, {
+    backlog: 80 * 1024 * 1024, logUsedPercent: 80, logReuseWait: "ACTIVE_TRANSACTION"
+  }, {
+    memoryUsed: 580, workersUsed: 580, logUsed: 80 * 1024 * 1024
+  }), 120)
+
+  assert.equal(Model.engineFamily("sqlserver"), "sqlserver")
+  assert.equal(Model.engineLabel("sqlserver"), "SQL Server")
+  assert.deepEqual(Model.engineDefaults("sqlserver"), { port: 1433, database: "master", user: "sa" })
+  assert.equal(second.rates.work, 10)
+  assert.equal(second.rates.logBytes, 1024)
+  assert.equal(second.maintenance.kind, "log")
+  assert.equal(second.maintenance.backlogLabel, "LOG USED")
+  assert.equal(second.capacityPercent, 580 / 704 * 100)
+  assert.equal(second.histories.capacityUsed.at(-1).value, 580)
+  assert.equal(second.histories.maintenanceBacklog.at(-1).value, 80 * 1024 * 1024)
+  assert.equal(second.severity, "warning")
+  assert.equal(second.statusLabel, "Waiting")
+  assert.match(Model.barLabel(second, "Work", false), /b\/s/)
+  assert.match(Model.barLabel(second, "Capacity", false), /workers/)
+  assert.match(Model.barLabel(second, "Maintenance", false), /MiB log/)
+  assert.equal(Model.dependencyInstallCommand("sqlserver", "sqlcmd is not installed"), "omarchy pkg aur add mssql-tools")
 })
 
 test("SSH tunnel ports probe past collisions while preserving safe assignments", () => {
@@ -374,7 +431,7 @@ test("publishing surface uses the permanent plugin identity", () => {
 
   assert.match(readme, /omarchy plugin add https:\/\/github\.com\/ryrobes\/hazel\.git --enable/)
   assert.match(readme, /omarchy plugin remove ryrobes\.hazel/)
-  assert.match(readme, /!\[Hazel monitoring five database profiles\]\(preview\.png\)/)
+  assert.match(readme, /!\[Hazel monitoring multiple database profiles\]\(preview\.png\)/)
   assert.match(notices, /Third-party notices/)
   assert.ok(fs.existsSync(path.join(root, "preview.png")))
 })
@@ -511,6 +568,7 @@ test("collapsed engine watermark swaps to pg_rvbbit when the extension is presen
   assert.match(watermark, /engine === "mariadb"[\s\S]*?assets\/mariadb\.svg/)
   assert.match(watermark, /engine === "percona"[\s\S]*?assets\/percona\.svg/)
   assert.match(watermark, /engine === "clickhouse"[\s\S]*?assets\/clickhouse\.svg/)
+  assert.match(watermark, /engine === "sqlserver"[\s\S]*?assets\/sqlserver\.svg/)
   assert.match(watermark, /colorizationColor: root\.accent/)
   assert.match(sql, /FROM pg_extension WHERE extname = 'pg_rvbbit'/)
   assert.match(sql, /'pgRvbbit', identity\.has_pg_rvbbit/)
@@ -530,12 +588,16 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(setup, /"value": "mariadb", "label": "MariaDB"/)
   assert.match(setup, /"value": "percona", "label": "Percona 8\+"/)
   assert.match(setup, /"value": "clickhouse", "label": "ClickHouse"/)
+  assert.match(setup, /"value": "sqlserver", "label": "SQL Server"/)
   assert.match(controller, /engineName === "mariadb" \? "mariadb"/)
   assert.match(controller, /engineFamily === "clickhouse" \? "clickhouse"/)
   assert.match(controller, /function mysqlCommand\(\)/)
   assert.match(controller, /function clickhouseCommand\(sql\)/)
+  assert.match(controller, /function sqlserverCommand\(\)/)
   assert.match(controller, /mariadb.*--skip-column-names.*--unbuffered/)
   assert.match(controller, /environment\.CLICKHOUSE_PASSWORD = sessionPassword/)
+  assert.match(controller, /environment\.SQLCMDPASSWORD = sessionPassword/)
+  assert.match(controller, /"-w", "65535", "-y", "0", "-r1", "-b", "-x"/)
   assert.match(controller, /function clickhouseCommand\(sql\)/)
   assert.match(controller, /--query", String\(sql \|\| ""\)/)
   assert.match(controller, /engineFamily === "clickhouse" && root\.oneShotSucceeded/)
@@ -547,11 +609,12 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(controller, /MAX_EXECUTION_TIME=5000/)
   assert.match(controller, /max_statement_time=5/)
   assert.match(block, /root\.snapshot\.maintenance\.surfaceLabel/)
-  assert.match(block, /Model\.isClickHouse\(root\.snapshot\.engine\).*?" q\/s" : " tx\/s"/s)
+  assert.match(block, /Model\.isSqlServer\(root\.snapshot\.engine\) \? " b\/s"/)
   assert.match(block, /\["RUN", "MERGE", "MUTATE", "MEM"\]/)
   assert.match(block, /BackgroundWork\s*\{/)
   assert.match(aperture, /maintenanceKind === "purge"/)
   assert.match(aperture, /\["flow", "running", "memory", "maintenance"\]/)
+  assert.match(aperture, /\["flow", "locks", "workers", "log"\]/)
   assert.match(background, /NumberAnimation on phase/)
   assert.match(background, /running: root\.visible && root\.jobs\.length > 0/)
   assert.match(background, /parts at rest/)
@@ -567,11 +630,12 @@ test("collector secrets stay out of argv and database streams are bounded", () =
   const reader = fs.readFileSync(path.join(root, "BoundedLineReader.qml"), "utf8")
 
   assert.doesNotMatch(controller, /\["env"/)
-  assert.doesNotMatch(controller, /command\.push\("(?:PGPASSWORD|MYSQL_PWD|CLICKHOUSE_PASSWORD)=/)
+  assert.doesNotMatch(controller, /command\.push\("(?:PGPASSWORD|MYSQL_PWD|CLICKHOUSE_PASSWORD|SQLCMDPASSWORD)=/)
   assert.match(controller, /psqlProc\.environment = databaseEnvironment\(\)/)
   assert.match(controller, /environment\.PGPASSWORD = sessionPassword/)
   assert.match(controller, /environment\.MYSQL_PWD = sessionPassword/)
   assert.match(controller, /environment\.CLICKHOUSE_PASSWORD = sessionPassword/)
+  assert.match(controller, /environment\.SQLCMDPASSWORD = sessionPassword/)
   assert.match(controller, /property int credentialGeneration:\s*0/)
   assert.match(controller, /property bool secretLookupStopping:\s*false/)
   assert.match(controller, /secretLookupGeneration !== root\.credentialGeneration/)
@@ -744,4 +808,18 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   assert.match(clickhouseDetails, /system\.parts/)
   assert.match(clickhouseDetails, /system\.mutations/)
   assert.match(clickhouseDetails, /replaceRegexpAll/)
+
+  for (const file of ["summary.sql", "details.sql"]) {
+    const sqlserverSql = fs.readFileSync(path.join(root, "sqlserver", file), "utf8")
+    assert.doesNotMatch(sqlserverSql, /^\s*(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|kill|execute|exec)\b/im)
+  }
+  const sqlserverSummarySql = fs.readFileSync(path.join(root, "sqlserver", "summary.sql"), "utf8")
+  const sqlserverDetails = fs.readFileSync(path.join(root, "sqlserver", "details.sql"), "utf8")
+  assert.match(sqlserverSummarySql, /sys\.dm_os_performance_counters/)
+  assert.match(sqlserverSummarySql, /sys\.dm_os_waiting_tasks/)
+  assert.match(sqlserverSummarySql, /sys\.dm_db_log_space_usage/)
+  assert.match(sqlserverDetails, /sys\.dm_exec_requests/)
+  assert.match(sqlserverDetails, /sys\.dm_db_index_operational_stats/)
+  assert.match(sqlserverDetails, /query_hash/)
+  assert.doesNotMatch(sqlserverDetails, /SUBSTRING\([^)]*\.text/i)
 })

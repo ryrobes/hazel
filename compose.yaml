@@ -90,9 +90,43 @@ services:
       - hazel-clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
 
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: hazel-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: Hazel-root-dev-only!42
+    ports:
+      - "127.0.0.1:55437:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "SQLCMDPASSWORD=\"$$MSSQL_SA_PASSWORD\" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q 'SELECT 1' >/dev/null"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - hazel-sqlserver-data:/var/opt/mssql
+
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: hazel-sqlserver-init
+    profiles: ["fixture-init"]
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SQLCMDPASSWORD: Hazel-root-dev-only!42
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - "/opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -i /init/001-hazel-fixture.sql"
+    volumes:
+      - ./sqlserver/init:/init:ro
+    restart: "no"
+
 volumes:
   hazel-postgres-data:
   hazel-mysql-data:
   hazel-mariadb-data:
   hazel-percona-data:
   hazel-clickhouse-data:
+  hazel-sqlserver-data:

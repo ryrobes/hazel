@@ -20,6 +20,8 @@ Item {
             return Qt.resolvedUrl("assets/percona.svg");
         if (engine === "clickhouse")
             return Qt.resolvedUrl("assets/clickhouse.svg");
+        if (engine === "sqlserver")
+            return Qt.resolvedUrl("assets/sqlserver.svg");
         return "";
     }
 

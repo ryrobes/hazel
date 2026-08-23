@@ -22,9 +22,12 @@ applicable trademark rights.
   mark](https://www.percona.com/wp-content/uploads/2026/02/Logo.svg). Percona
   trademark rights remain with Percona LLC.
 
-The PostgreSQL, MySQL, MariaDB, Percona, and ClickHouse names and marks identify
-compatible database engines. Their use does not imply endorsement or
-affiliation.
+The SQL Server compatibility mark is original Hazel artwork and is not a copy
+of Microsoft's product logo.
+
+The PostgreSQL, MySQL, MariaDB, Percona, ClickHouse, and SQL Server names and
+marks identify compatible database engines. Their use does not imply
+endorsement or affiliation.
 
 ## Hazel wordmark
 

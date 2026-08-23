@@ -76,6 +76,10 @@ BorderSurface {
             return Number(row.rowsChanged || 0).toLocaleString() + " changed · "
                 + Number(row.rowsRead || 0).toLocaleString() + " read · "
                 + Number(row.totalWaitMs || 0).toLocaleString() + "ms I/O";
+        if (Model.isSqlServer(snapshot.engine))
+            return Number(row.rowsChanged || 0).toLocaleString() + " changed · "
+                + Number(row.rowsRead || 0).toLocaleString() + " reads · "
+                + Number(row.totalWaitMs || 0).toLocaleString() + "ms lock wait";
         var ratio = Number(row.deadPercent || 0);
         var text = Number(row.deadTuples || 0).toLocaleString() + " dead · " + ratio.toFixed(ratio >= 10 ? 0 : 1) + "%";
         if (row.lastAutovacuum)
@@ -93,6 +97,8 @@ BorderSurface {
                 return snapshot.maintenance.pendingMutations || 0;
             return Math.round(snapshot.capacityPercent || 0) + "%";
         }
+        if (Model.isSqlServer(snapshot.engine) && label === "WORKER")
+            return Number(snapshot.capacity.workersUsed || 0) + "/" + Number(snapshot.capacity.workersMax || 0);
         if (label === "ACTIVE")
             return snapshot.connections.active;
         if (label === "WAIT")
@@ -110,6 +116,8 @@ BorderSurface {
                 return Number(snapshot.capacityPercent || 0) >= 95 ? urgent : (Number(snapshot.capacityPercent || 0) >= 80 ? warning : foreground);
             return accent;
         }
+        if (Model.isSqlServer(snapshot.engine) && label === "WORKER")
+            return Number(snapshot.capacityPercent || 0) >= 95 ? urgent : (Number(snapshot.capacityPercent || 0) >= 80 ? warning : foreground);
         if (label === "ACTIVE")
             return accent;
         if (label === "WAIT")
@@ -122,12 +130,16 @@ BorderSurface {
     function statHot(label) {
         if (Model.isClickHouse(snapshot.engine) && label === "MEM")
             return Number(snapshot.capacityPercent || 0) >= 80;
+        if (Model.isSqlServer(snapshot.engine) && label === "WORKER")
+            return Number(snapshot.capacityPercent || 0) >= 80;
         if (label === "CONN")
             return Number(snapshot.connections.used || 0) > 0;
         return Number(statValue(label) || 0) > 0;
     }
 
     function statLabels() {
+        if (Model.isSqlServer(snapshot.engine))
+            return ["ACTIVE", "WAIT", "BLOCK", "WORKER"];
         return Model.isClickHouse(snapshot.engine) ? ["RUN", "MERGE", "MUTATE", "MEM"] : ["ACTIVE", "WAIT", "BLOCK", "CONN"];
     }
 
@@ -393,11 +405,11 @@ BorderSurface {
             Layout.preferredHeight: Style.space(root.expanded ? 236 : 146)
             engine: root.snapshot.engine
             transactions: Number(root.snapshot.rates.work || 0)
-            lockWaits: Number(root.snapshot.connections.lockWaiting || 0)
+            lockWaits: Model.isSqlServer(root.snapshot.engine) ? Number(root.snapshot.connections.waiting || 0) : Number(root.snapshot.connections.lockWaiting || 0)
             blocked: Number(root.snapshot.connections.blocked || 0)
             oldestLockWaitSeconds: Number(root.snapshot.connections.oldestLockWaitSeconds || 0)
-            connectionsUsed: Number(root.snapshot.connections.used || 0)
-            maxConnections: Number(root.snapshot.connections.max || 0)
+            connectionsUsed: Model.isSqlServer(root.snapshot.engine) ? Number(root.snapshot.capacity.workersUsed || 0) : Number(root.snapshot.connections.used || 0)
+            maxConnections: Model.isSqlServer(root.snapshot.engine) ? Number(root.snapshot.capacity.workersMax || 0) : Number(root.snapshot.connections.max || 0)
             deadTuples: Number(root.snapshot.maintenance.backlog || 0)
             autovacuumWorkers: Number(root.snapshot.maintenance.autoWorkerCount || 0)
             vacuumWorkers: Number(root.snapshot.maintenance.workerCount || 0)
@@ -407,10 +419,12 @@ BorderSurface {
             activeParts: root.snapshot.maintenance.activeParts || 0
             capacityUsed: root.snapshot.capacity.memoryUsed || 0
             capacityMax: root.snapshot.capacity.memoryMax || 0
+            logTotal: root.snapshot.capacity.logTotal || 0
+            logReuseWait: root.snapshot.maintenance.logReuseWait || ""
             lastAutovacuum: root.snapshot.mvcc.lastAutovacuum
             lastVacuum: root.snapshot.mvcc.lastVacuum
             transactionHistory: root.snapshot.histories.work
-            lockWaitHistory: root.snapshot.histories.lockWaiting
+            lockWaitHistory: Model.isSqlServer(root.snapshot.engine) ? root.snapshot.histories.waiting : root.snapshot.histories.lockWaiting
             connectionHistory: root.snapshot.histories.connectionsUsed
             deadTupleHistory: root.snapshot.histories.maintenanceBacklog
             autovacuumHistory: root.snapshot.histories.autovacuumCount
@@ -498,7 +512,7 @@ BorderSurface {
                 Text {
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    text: Model.formatRate(root.snapshot.rates.work, (Model.isMysqlFamily(root.snapshot.engine) || Model.isClickHouse(root.snapshot.engine)) ? " q/s" : " tx/s")
+                    text: Model.formatRate(root.snapshot.rates.work, Model.isSqlServer(root.snapshot.engine) ? " b/s" : ((Model.isMysqlFamily(root.snapshot.engine) || Model.isClickHouse(root.snapshot.engine)) ? " q/s" : " tx/s"))
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -538,7 +552,7 @@ BorderSurface {
                 spacing: 1
 
                 Text {
-                    text: Model.isClickHouse(root.snapshot.engine) ? "BACKGROUND" : "LOCK FLOW"
+                    text: Model.isClickHouse(root.snapshot.engine) ? "BACKGROUND" : (Model.isSqlServer(root.snapshot.engine) ? "WAIT FLOW" : "LOCK FLOW")
                     color: Model.isClickHouse(root.snapshot.engine)
                         ? (root.snapshot.background.length > 0 ? root.accent : root.muted)
                         : (root.snapshot.connections.blocked > 0 ? root.urgent : root.muted)
@@ -585,6 +599,7 @@ BorderSurface {
                 Layout.preferredWidth: Style.space(230)
                 Layout.fillHeight: true
                 edges: root.snapshot.blocking
+                titleText: Model.isSqlServer(root.snapshot.engine) ? "WAIT FLOW" : "LOCK FLOW"
                 foreground: root.foreground
                 accent: root.accent
                 urgent: root.urgent
@@ -628,9 +643,11 @@ BorderSurface {
                         ? Number(root.snapshot.maintenance.activeMerges || 0) + " merging · "
                             + Number(root.snapshot.maintenance.pendingMutations || 0) + " mutations · "
                             + Number(root.snapshot.maintenance.activeParts || 0).toLocaleString() + " active parts"
+                        : (Model.isSqlServer(root.snapshot.engine)
+                            ? Model.formatBytes(root.snapshot.maintenance.backlog || 0) + " log used · reuse " + String(root.snapshot.maintenance.logReuseWait || "NOTHING").replace(/_/g, " ").toLowerCase()
                         : (Model.isMysqlFamily(root.snapshot.engine)
                             ? Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " undo records pending purge"
-                            : Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " estimated dead tuples")
+                            : Number(root.snapshot.maintenance.backlog || 0).toLocaleString() + " estimated dead tuples"))
                     color: root.muted
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption

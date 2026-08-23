@@ -25,6 +25,8 @@ Item {
     property int activeParts: 0
     property real capacityUsed: 0
     property real capacityMax: 0
+    property real logTotal: 0
+    property string logReuseWait: ""
     property var lastAutovacuum: null
     property var lastVacuum: null
     property var transactionHistory: []
@@ -46,6 +48,8 @@ Item {
     property string fontFamily: Style.font.family
 
     function rowKeys() {
+        if (Model.isSqlServer(engine))
+            return ["flow", "locks", "workers", "log"];
         return Model.isClickHouse(engine) ? ["flow", "running", "memory", "maintenance"] : ["flow", "locks", "connections", "deadTuples"];
     }
 
@@ -53,9 +57,13 @@ Item {
         if (key === "flow")
             return "FLOW";
         if (key === "locks")
-            return "LOCK WAITS";
+            return Model.isSqlServer(engine) ? "WAITING TASKS" : "LOCK WAITS";
         if (key === "connections")
             return "CONNECTIONS";
+        if (key === "workers")
+            return "WORKERS";
+        if (key === "log")
+            return "LOG USED";
         if (key === "running")
             return "RUNNING";
         if (key === "memory")
@@ -72,6 +80,8 @@ Item {
             return "connections";
         if (key === "memory")
             return "bytes";
+        if (key === "log")
+            return "bytes";
         return "count";
     }
 
@@ -86,6 +96,10 @@ Item {
             return runningQueries;
         if (key === "memory")
             return capacityUsed;
+        if (key === "workers")
+            return capacityUsed;
+        if (key === "log")
+            return deadTuples;
         if (key === "maintenance")
             return deadTuples;
         return deadTuples;
@@ -102,6 +116,10 @@ Item {
             return runningHistory;
         if (key === "memory")
             return capacityHistory;
+        if (key === "workers")
+            return capacityHistory;
+        if (key === "log")
+            return deadTupleHistory;
         return deadTupleHistory;
     }
 
@@ -139,6 +157,8 @@ Item {
     function currentText(key) {
         if (key === "connections")
             return formatCount(rowCurrent(key)) + "/" + formatCount(maxConnections);
+        if (key === "workers")
+            return formatCount(rowCurrent(key)) + "/" + formatCount(capacityMax);
         if (key === "memory")
             return formatValue(rowCurrent(key), rowKind(key));
         return formatValue(rowCurrent(key), rowKind(key));
@@ -155,6 +175,16 @@ Item {
     function lockContext() {
         if (Model.isClickHouse(engine))
             return runningQueries + (runningQueries === 1 ? " QUERY RUNNING" : " QUERIES RUNNING");
+        if (Model.isSqlServer(engine) && lockWaits <= 0)
+            return "WAITS CLEAR";
+        if (Model.isSqlServer(engine)) {
+            var waitText = lockWaits + (lockWaits === 1 ? " WAITING TASK" : " WAITING TASKS");
+            if (blocked > 0)
+                waitText += " · " + blocked + " BLOCKED";
+            if (oldestLockWaitSeconds > 0)
+                waitText += " · " + Model.formatDuration(oldestLockWaitSeconds) + " OLD";
+            return waitText;
+        }
         if (lockWaits <= 0)
             return "LOCKS CLEAR";
         var text = lockWaits + (lockWaits === 1 ? " LOCK WAIT" : " LOCK WAITS");
@@ -174,6 +204,11 @@ Item {
             return activeMerges + (activeMerges === 1 ? " MERGE" : " MERGES")
                 + " · " + pendingMutations + (pendingMutations === 1 ? " MUTATION" : " MUTATIONS")
                 + " · " + formatCount(activeParts) + " PARTS";
+        if (Model.isSqlServer(engine)) {
+            var logPercent = logTotal > 0 ? deadTuples / logTotal * 100 : 0;
+            var reuse = String(logReuseWait || "NOTHING").replace(/_/g, " ");
+            return "LOG " + logPercent.toFixed(logPercent >= 10 ? 0 : 1) + "% · REUSE " + reuse;
+        }
         var trend = mvccTrendPerMinute();
         var lastDrop = Model.historyLastDrop(deadTupleHistory);
         var recentDrop = lastDrop.amount > 0 && Date.now() - lastDrop.at <= 10 * 60 * 1000;
@@ -213,12 +248,20 @@ Item {
             var ratio = maxConnections > 0 ? current / maxConnections : 0;
             return ratio >= 0.95 ? urgent : (ratio >= 0.8 ? warning : accent);
         }
+        if (key === "workers") {
+            var workerRatio = capacityMax > 0 ? current / capacityMax : 0;
+            return workerRatio >= 0.95 ? urgent : (workerRatio >= 0.8 ? warning : accent);
+        }
         if (key === "memory") {
             var capacityRatio = capacityMax > 0 ? current / capacityMax : 0;
             return capacityRatio >= 0.95 ? urgent : (capacityRatio >= 0.8 ? warning : accent);
         }
         if (key === "maintenance")
             return pendingMutations > 0 ? warning : accent;
+        if (key === "log") {
+            var logRatio = logTotal > 0 ? current / logTotal : 0;
+            return logRatio >= 0.95 ? urgent : (logRatio >= 0.8 ? warning : accent);
+        }
         if (key === "deadTuples") {
             var trend = mvccTrendPerMinute();
             if (stats.count >= 12 && stats.p90 > 0 && current > stats.p90 * 1.5)
@@ -422,7 +465,7 @@ Item {
                             ctx.clearRect(0, 0, width, height);
                             var history = root.historyFor(behaviorRow.key);
                             var stats = behaviorRow.stats;
-                            var zoomed = behaviorRow.key === "connections" || behaviorRow.key === "deadTuples" || behaviorRow.key === "running" || behaviorRow.key === "memory" || behaviorRow.key === "maintenance";
+                            var zoomed = behaviorRow.key === "connections" || behaviorRow.key === "deadTuples" || behaviorRow.key === "running" || behaviorRow.key === "memory" || behaviorRow.key === "maintenance" || behaviorRow.key === "workers" || behaviorRow.key === "log";
                             var span = Math.max(0, stats.high - stats.low);
                             var pad = zoomed ? Math.max(1, span * 0.12, stats.high * 0.005) : 0;
                             var axisLow = zoomed ? Math.max(0, stats.low - pad) : 0;
@@ -556,7 +599,11 @@ Item {
             Text {
                 Layout.minimumWidth: 0
                 text: root.vacuumContext()
-                color: Model.isClickHouse(root.engine) ? (root.pendingMutations > 0 ? root.warning : root.muted) : (root.mvccTrendPerMinute() > 0.5 ? root.warning : root.muted)
+                color: Model.isClickHouse(root.engine)
+                    ? (root.pendingMutations > 0 ? root.warning : root.muted)
+                    : (Model.isSqlServer(root.engine)
+                        ? (root.logTotal > 0 && root.deadTuples / root.logTotal >= 0.8 ? root.warning : root.muted)
+                        : (root.mvccTrendPerMinute() > 0.5 ? root.warning : root.muted))
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true

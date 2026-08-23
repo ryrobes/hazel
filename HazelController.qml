@@ -33,7 +33,7 @@ Item {
     readonly property bool connectionConfigured: booleanSetting("configured", false)
     readonly property string engineName: normalizedEngine(stringSetting("engine", "postgresql"))
     readonly property string engineFamily: Model.engineFamily(engineName)
-    readonly property string sqlDirectory: engineName === "mariadb" ? "mariadb" : (engineFamily === "clickhouse" ? "clickhouse" : (engineFamily === "mysql" ? "mysql" : "postgres"))
+    readonly property string sqlDirectory: engineName === "mariadb" ? "mariadb" : (engineFamily === "clickhouse" ? "clickhouse" : (engineFamily === "sqlserver" ? "sqlserver" : (engineFamily === "mysql" ? "mysql" : "postgres")))
     readonly property var engineDefaults: Model.engineDefaults(engineName)
     readonly property string profileId: stringSetting("activeProfileId", "default-postgres")
     readonly property string profileName: stringSetting("profileName", "Postgres")
@@ -71,7 +71,7 @@ Item {
 
     function normalizedEngine(value) {
         var engine = String(value || "postgresql").toLowerCase();
-        return engine === "mysql" || engine === "mariadb" || engine === "percona" || engine === "clickhouse" ? engine : "postgresql";
+        return engine === "mysql" || engine === "mariadb" || engine === "percona" || engine === "clickhouse" || engine === "sqlserver" ? engine : "postgresql";
     }
 
     function boundedSetting(name, fallback, minimum, maximum) {
@@ -258,6 +258,24 @@ Item {
         return command;
     }
 
+    function sqlserverCommand() {
+        var host = sshEnabled ? "127.0.0.1" : hostName;
+        var targetPort = sshEnabled ? sshLocalPort : port;
+        var command = ["sqlcmd", "-S", host + "," + String(targetPort), "-U", userName,
+            "-l", "3", "-t", "5", "-w", "65535", "-y", "0", "-r1", "-b", "-x"];
+        if (databaseName !== "")
+            command.push("-d", databaseName);
+        if (sslMode === "disable")
+            command.push("-No");
+        else if (sslMode === "verify-ca" || sslMode === "verify-full")
+            command.push("-Ns");
+        else if (sslMode === "require")
+            command.push("-Nm", "-C");
+        else
+            command.push("-No", "-C");
+        return command;
+    }
+
     function databaseEnvironment() {
         var environment = {};
         if (engineFamily === "postgresql") {
@@ -278,6 +296,8 @@ Item {
                 environment.MYSQL_PWD = sessionPassword;
         } else if (engineFamily === "clickhouse" && sessionPassword !== "") {
             environment.CLICKHOUSE_PASSWORD = sessionPassword;
+        } else if (engineFamily === "sqlserver" && sessionPassword !== "") {
+            environment.SQLCMDPASSWORD = sessionPassword;
         }
         return environment;
     }
@@ -285,6 +305,8 @@ Item {
     function databaseCommand() {
         if (engineFamily === "mysql")
             return mysqlCommand();
+        if (engineFamily === "sqlserver")
+            return sqlserverCommand();
         return psqlCommand();
     }
 
@@ -297,6 +319,8 @@ Item {
             return "mariadb client is not installed";
         if (engineFamily === "clickhouse")
             return "clickhouse client is not installed";
+        if (engineFamily === "sqlserver")
+            return "sqlcmd is not installed";
         return "psql is not installed";
     }
 
@@ -458,7 +482,7 @@ Item {
         if (text === "")
             return ;
 
-        text = text.replace(/^(psql|mariadb|mysql|clickhouse(?:-client)?):\s*/i, "");
+        text = text.replace(/^(psql|mariadb|mysql|sqlcmd|clickhouse(?:-client)?):\s*/i, "");
         errorText = text.length > 180 ? text.slice(0, 177) + "…" : text;
     }
 

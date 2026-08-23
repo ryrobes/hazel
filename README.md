@@ -1,13 +1,14 @@
 # Hazel
 
 Hazel is a read-only database instrument for the Omarchy 4 bar. It monitors
-PostgreSQL, MySQL 8+, MariaDB, Percona Server, and ClickHouse through native,
-noninteractive clients. PostgreSQL and the MySQL family keep one persistent
+PostgreSQL, MySQL 8+, MariaDB, Percona Server, ClickHouse, and Microsoft SQL
+Server through native, noninteractive clients. PostgreSQL, the MySQL family,
+and SQL Server keep one persistent
 session per enabled profile; ClickHouse uses one bounded client process per
 sample because its native batch client consumes queries through EOF. Every collector keeps its own time-bucketed
 session history in memory and never writes to the database it observes.
 
-![Hazel monitoring five database profiles](preview.png)
+![Hazel monitoring multiple database profiles](preview.png)
 
 Hazel is deliberately not a tiny Grafana dashboard. Its first job is to show
 what changed: work rate, session pressure, waits and blocking, log generation,
@@ -29,16 +30,18 @@ watermark bay. PostgreSQL uses the embedded CC0 SVG Repo elephant; databases
 with the `pg_rvbbit` extension installed use Hazel's embedded rvbbit mark
 instead. MySQL uses the embedded dolphin, MariaDB its sea-lion, and Percona its
 triangular loop mark. Each is theme-tinted in the same fixed bay, which remains
-the contract for future adapters. ClickHouse uses its column mark.
+the contract for future adapters. ClickHouse uses its column mark; SQL Server
+uses Hazel's original stacked-data mark.
 
 Profile cards are separated by space and their persistent accent rail rather
 than a perimeter stroke. A small embedded database glyph carries that same
 profile accent beside the database and route in compact and expanded views.
 
 When the panel is open, Hazel also samples active client queries and current
-blocking edges. Query whitespace is normalized and string/number literals are
-masked by each adapter before the text reaches the UI; idle sessions are not
-shown. Lock flow is rendered holder-to-waiter with the waiting mode and target
+blocking edges. PostgreSQL, MySQL-family, and ClickHouse query whitespace is
+normalized and string/number literals are masked before text reaches the UI.
+SQL Server never returns raw batch text: it reports the command plus a query
+hash or stored-module name. Idle sessions are not shown. Lock flow is rendered holder-to-waiter with the waiting mode and target
 when the engine exposes them. MySQL and Percona combine InnoDB data-lock waits
 and pending metadata locks. MariaDB reads its native `INNODB_LOCKS` and
 `INNODB_LOCK_WAITS` views, plus metadata locks when their Performance Schema
@@ -62,14 +65,17 @@ oldest wait age.
 ClickHouse replaces those relational lanes with finished query flow, running
 queries, server memory against its effective limit, and merge/mutation debt.
 Its part surface keeps active part counts and per-table rows/bytes in view.
+SQL Server uses batch flow, current user waiting tasks, active/max workers, and
+transaction-log use. Its detail surface pairs live requests and holder/waiter
+edges with per-table reads, writes, and accumulated row/page lock-wait time.
 The window is configurable from
-1–24 hours and defaults to six hours. History remains memory-only in v0.4 and
+1–24 hours and defaults to six hours. History remains memory-only in v0.5 and
 resets when the Omarchy shell restarts. Flow subtracts Hazel's own known
 snapshot work so an otherwise quiet database still reads as quiet.
 
 ## Status
 
-This is an early working shell. PostgreSQL, MySQL 8, MariaDB, Percona, and ClickHouse
+This is an early working shell. PostgreSQL, MySQL 8, MariaDB, Percona, ClickHouse, and SQL Server
 summary/detail snapshots are implemented. Future releases will deepen capability-aware views and may
 add optional SQLite or DuckDB history outside the monitored database.
 
@@ -87,6 +93,9 @@ https://www.percona.com/wp-content/uploads/2026/02/Logo.svg.
 
 The ClickHouse watermark uses the ClickHouse brand path distributed by Simple
 Icons: https://simpleicons.org/?q=clickhouse.
+
+The SQL Server compatibility watermark is original Hazel artwork rather than a
+redistributed Microsoft logo.
 
 The Visor rabbit is original artwork developed for Hazel. The HAZEL wordmark is
 outlined from Outrun Future Bold by Andeh Pinkard / Press Gang Studios. The
@@ -111,13 +120,14 @@ Hazel-specific connection files are required.
 - `postgresql-libs` (`psql`) for PostgreSQL profiles
 - `mariadb-clients` (`mariadb`) for MySQL, MariaDB, and Percona profiles
 - `clickhouse` (`clickhouse client`) for ClickHouse profiles
+- `mssql-tools` (`sqlcmd`, from the AUR) for SQL Server profiles
 - `openssh` (`ssh`) for tunneled profiles
 - `libsecret` (`secret-tool`) to remember passwords in the desktop keyring
 - A database account with read access to the engine's monitoring views
 
 Hazel runs with the same user permissions as the Omarchy shell. At runtime it
-only starts the client required by each enabled profile—`psql`, `mariadb`, or
-`clickhouse client`—plus `ssh` for tunnels and `secret-tool` for remembered
+only starts the client required by each enabled profile—`psql`, `mariadb`,
+`clickhouse client`, or `sqlcmd`—plus `ssh` for tunnels and `secret-tool` for remembered
 credentials. It does not use `sudo`, install packages, or create system
 services. Docker and Docker Compose are development-test dependencies only.
 
@@ -138,6 +148,14 @@ database. Hazel reads `system.processes`, `events`, `metrics`, `asynchronous_met
 `merges`, `mutations`, `parts`, `disks`, and replication queues. It does not
 issue `KILL`, `OPTIMIZE`, `ALTER`, or `SYSTEM` commands.
 
+For SQL Server 2022+, grant the login `VIEW SERVER PERFORMANCE STATE`, create a
+user in each monitored database, grant it `VIEW DATABASE PERFORMANCE STATE`,
+and add it to `db_datareader`. Older SQL Server releases expose the same DMV
+shape through the broader `VIEW SERVER STATE` and `VIEW DATABASE STATE`
+permissions. Hazel reads performance counters, schedulers, requests, waits,
+transaction-log space, and database index statistics; it does not execute raw
+query text or any mutation command.
+
 ## Connect
 
 Open Hazel's **Config** view to add, edit, pause, or enable named profiles.
@@ -147,7 +165,7 @@ the current Omarchy theme and follows that database through pressure memory,
 activity, lock flow, and status. Histories remain isolated per profile and are
 never combined into a synthetic database timeline.
 
-Each profile chooses PostgreSQL, MySQL, MariaDB, Percona, or ClickHouse, then defines that engine's target and
+Each profile chooses PostgreSQL, MySQL, MariaDB, Percona, ClickHouse, or SQL Server, then defines that engine's target and
 can optionally use a separate SSH
 gateway. Hazel manages forwarding internally, so the editor only asks for the
 database and SSH ports people actually configure. SSH is noninteractive: use
@@ -168,19 +186,22 @@ leave the password empty; a Unix socket path can be entered in the host field.
 
 ## Local database test targets
 
-The included Compose project exposes five independent development databases:
+The included Compose project exposes six independent development databases:
 
 - PostgreSQL 18 on `127.0.0.1:55432`
 - MySQL 8.4 LTS on `127.0.0.1:55433`
 - MariaDB 11.8 on `127.0.0.1:55434`
 - Percona Server 8.4 on `127.0.0.1:55435`
 - ClickHouse 25.8 on `127.0.0.1:55436`
+- SQL Server 2022 on `127.0.0.1:55437`
 
 ```sh
 docker compose up -d --wait
+docker compose run --rm --no-deps sqlserver-init
 ```
 
-All use database/user `hazel` and password `hazel-dev-only`. These credentials
+All use database/user `hazel` and password `hazel-dev-only`, except the SQL
+Server fixture password is `Hazel-dev-only!42` to satisfy its password policy. These credentials
 are for the local development containers only. The MySQL-family monitor account is
 read-only; tests use separate fixture-administrator credentials only to
 manufacture active queries, lock waits, purge debt, parts, and mutations.
@@ -213,6 +234,8 @@ tests/mariadb-sql.test.sh
 tests/percona-sql.test.sh
 tests/clickhouse-sql.test.sh
 tests/clickhouse-qml.test.sh
+tests/sqlserver-sql.test.sh
+tests/sqlserver-qml.test.sh
 ```
 
 ## Controls
@@ -227,7 +250,7 @@ tests/clickhouse-qml.test.sh
 - `Esc`: close
 - `Tab` / `Shift+Tab`: switch between adjacent Omarchy panels
 
-Hazel v0.4 is strictly read-only. Query inspection and cancellation affordances
+Hazel v0.5 is strictly read-only. Query inspection and cancellation affordances
 remain intentionally deferred until the interaction and privilege model is
 ready for them.
 
@@ -249,7 +272,8 @@ deleted automatically with the plugin.
 - Passwords never enter client command arguments; they are applied to the child
   process environment at launch
 - No writes to the monitored database
-- Active query text is session-only, whitespace-normalized, and literal-masked
+- Active query text is session-only and literal-masked; SQL Server emits only
+  command/query-hash or stored-module identifiers rather than raw batch text
 - Fixed SQL shipped with the plugin; passwords use the child environment,
   non-secret connection fields use client arguments, and neither is
   interpolated into SQL

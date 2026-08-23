@@ -18,6 +18,7 @@ function safeArray(value) {
 function engineFamily(engine) {
   var value = String(engine || "postgresql").toLowerCase()
   if (value === "mysql" || value === "mariadb" || value === "percona") return "mysql"
+  if (value === "sqlserver") return "sqlserver"
   return value === "clickhouse" ? "clickhouse" : "postgresql"
 }
 
@@ -27,6 +28,10 @@ function isMysqlFamily(engine) {
 
 function isClickHouse(engine) {
   return engineFamily(engine) === "clickhouse"
+}
+
+function isSqlServer(engine) {
+  return engineFamily(engine) === "sqlserver"
 }
 
 function internalTunnelPort(profileId, profiles, preferredPort) {
@@ -62,6 +67,7 @@ function engineLabel(engine) {
   if (value === "percona") return "Percona"
   if (value === "mysql") return "MySQL"
   if (value === "clickhouse") return "ClickHouse"
+  if (value === "sqlserver") return "SQL Server"
   return "PostgreSQL"
 }
 
@@ -71,6 +77,7 @@ function engineShortLabel(engine) {
   if (value === "percona") return "PERCONA"
   if (value === "mysql") return "MYSQL"
   if (value === "clickhouse") return "CH"
+  if (value === "sqlserver") return "SQL"
   return "PG"
 }
 
@@ -78,6 +85,7 @@ function engineDefaults(engine) {
   var family = engineFamily(engine)
   if (family === "mysql") return { port: 3306, database: "mysql", user: "root" }
   if (family === "clickhouse") return { port: 9000, database: "default", user: "default" }
+  if (family === "sqlserver") return { port: 1433, database: "master", user: "sa" }
   return { port: 5432, database: "postgres", user: "postgres" }
 }
 
@@ -89,6 +97,7 @@ function dependencyInstallCommand(engine, errorText) {
   var family = engineFamily(engine)
   if (family === "mysql") return "omarchy pkg add mariadb-clients"
   if (family === "clickhouse") return "omarchy pkg add clickhouse"
+  if (family === "sqlserver") return "omarchy pkg aur add mssql-tools"
   return "omarchy pkg add postgresql-libs"
 }
 
@@ -153,7 +162,11 @@ function emptyState() {
       memoryUsed: 0,
       memoryMax: 0,
       diskUsed: 0,
-      diskTotal: 0
+      diskTotal: 0,
+      workersUsed: 0,
+      workersMax: 0,
+      logUsed: 0,
+      logTotal: 0
     },
     replication: {},
     rates: { work: 0, logBytes: 0, transactions: 0, walBytes: 0, rowsModified: 0, rowsReturned: 0 },
@@ -334,6 +347,16 @@ function deriveClickHouseSeverity(connections, capacityPercent, maintenance) {
   return { severity: "normal", label: "Quiet" }
 }
 
+function deriveSqlServerSeverity(connections, capacityPercent, maintenance) {
+  var logPercent = finiteNumber(safeObject(maintenance).logUsedPercent, 0)
+  if (connections.blocked > 0 || capacityPercent >= 95 || logPercent >= 95)
+    return { severity: "critical", label: connections.blocked > 0 ? "Blocked" : (capacityPercent >= 95 ? "Worker exhaustion" : "Log full") }
+  if (connections.waiting > 0 || capacityPercent >= 80 || logPercent >= 80)
+    return { severity: "warning", label: connections.waiting > 0 ? "Waiting" : (capacityPercent >= 80 ? "Worker pressure" : "Log pressure") }
+  if (connections.active > 0) return { severity: "normal", label: "Active" }
+  return { severity: "normal", label: "Quiet" }
+}
+
 function ingestSummary(previousState, payload, historyPolicy) {
   var previous = previousState && previousState.sequence > 0 ? previousState : emptyState()
   var nextPayload = safeObject(payload)
@@ -369,6 +392,12 @@ function ingestSummary(previousState, payload, historyPolicy) {
       backlogLabel: "PURGE DEBT",
       surfaceLabel: "INNODB SURFACE"
     }, maintenancePayload)
+  } else if (isSqlServer(next.engine)) {
+    next.maintenance = Object.assign(next.maintenance, {
+      kind: "log",
+      backlogLabel: "LOG USED",
+      surfaceLabel: "TABLE PRESSURE"
+    }, maintenancePayload)
   } else {
     next.maintenance = Object.assign(next.maintenance, {
       kind: "vacuum",
@@ -388,7 +417,7 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.background = safeArray(previous.background)
   next.vacuum = safeArray(previous.vacuum)
 
-  var counterEngine = isMysqlFamily(next.engine) || isClickHouse(next.engine)
+  var counterEngine = isMysqlFamily(next.engine) || isClickHouse(next.engine) || isSqlServer(next.engine)
   next.rates.work = counterEngine
     ? rate(counters, previous.counters, ["workTotal"], elapsedSeconds, "statsReset")
     : rate(counters, previous.counters, ["xactCommit", "xactRollback"], elapsedSeconds, "databaseStatsReset")
@@ -407,7 +436,9 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.rates.walBytes = next.rates.logBytes
 
   next.cacheHitPercent = percentage(counters.blocksHit, finiteNumber(counters.blocksHit, 0) + finiteNumber(counters.blocksRead, 0))
-  next.connectionPercent = percentage(next.connections.used, next.connections.max)
+  next.connectionPercent = isSqlServer(next.engine)
+    ? percentage(next.capacity.workersUsed, next.capacity.workersMax)
+    : percentage(next.connections.used, next.connections.max)
   next.capacityPercent = percentage(next.capacity.memoryUsed, next.capacity.memoryMax)
   next.deadTuplePercent = percentage(next.mvcc.deadTuples, finiteNumber(next.mvcc.liveTuples, 0) + finiteNumber(next.mvcc.deadTuples, 0))
   next.peakTransactions = Math.max(finiteNumber(previous.peakTransactions, 0), next.rates.work)
@@ -417,9 +448,11 @@ function ingestSummary(previousState, payload, historyPolicy) {
     : (next.connections.waiting > 0 ? 1 : 0)
   next.pressures.workload = next.peakTransactions > 0 ? clamp(next.rates.work / next.peakTransactions, 0, 1) : 0
   next.pressures.contention = isClickHouse(next.engine) ? 0 : clamp(Math.max(waitingShare, next.connections.blocked * 0.5), 0, 1)
-  next.pressures.connections = isClickHouse(next.engine) ? next.capacityPercent / 100 : next.connectionPercent / 100
+  next.pressures.connections = isClickHouse(next.engine) || isSqlServer(next.engine) ? next.capacityPercent / 100 : next.connectionPercent / 100
   next.pressures.mvcc = next.deadTuplePercent / 100
-  next.pressures.maintenance = isMysqlFamily(next.engine) ? 0 : next.pressures.mvcc
+  next.pressures.maintenance = isSqlServer(next.engine)
+    ? finiteNumber(next.maintenance.logUsedPercent, 0) / 100
+    : (isMysqlFamily(next.engine) ? 0 : next.pressures.mvcc)
 
   var previousWork = previous.histories.work || previous.histories.transactions
   var previousLog = previous.histories.logBytes || previous.histories.walBytes
@@ -445,7 +478,9 @@ function ingestSummary(previousState, payload, historyPolicy) {
 
   var status = isClickHouse(next.engine)
     ? deriveClickHouseSeverity(next.connections, next.capacityPercent, next.maintenance)
-    : deriveSeverity(next.connections, next.connectionPercent, next.deadTuplePercent)
+    : (isSqlServer(next.engine)
+      ? deriveSqlServerSeverity(next.connections, next.capacityPercent, next.maintenance)
+      : deriveSeverity(next.connections, next.connectionPercent, next.deadTuplePercent))
   next.severity = status.severity
   next.statusLabel = status.label
   return next
@@ -523,19 +558,22 @@ function barLabel(state, mode, vertical) {
     if (isClickHouse(data.engine) && data.capacityPercent >= 80) selected = "Capacity"
     else if (isClickHouse(data.engine) && finiteNumber(data.maintenance.backlog, 0) > 0) selected = "Maintenance"
     else if (data.connections.blocked > 0) selected = "Waits"
+    else if (isSqlServer(data.engine) && data.capacityPercent >= 80) selected = "Capacity"
     else if (data.connectionPercent >= 80) selected = "Connections"
     else if (data.connections.waiting > 0) selected = "Activity"
     else selected = "Work"
   }
   var value = ""
-  var workSuffix = isMysqlFamily(data.engine) || isClickHouse(data.engine) ? "q/s" : "t/s"
+  var workSuffix = isSqlServer(data.engine) ? "b/s" : (isMysqlFamily(data.engine) || isClickHouse(data.engine) ? "q/s" : "t/s")
   if (selected === "Work" || selected === "Transactions") value = formatRate(data.rates.work, workSuffix)
   else if (selected === "Activity") value = data.connections.active + " act"
   else if (selected === "Connections") value = Math.round(data.connectionPercent) + "% conn"
-  else if (selected === "Capacity") value = Math.round(data.capacityPercent) + "% mem"
+  else if (selected === "Capacity") value = Math.round(data.capacityPercent) + (isSqlServer(data.engine) ? "% workers" : "% mem")
   else if (selected === "Waits") value = data.connections.blocked > 0 ? data.connections.blocked + " block" : data.connections.waiting + " wait"
   else if (selected === "Log" || selected === "WAL") value = formatBytes(data.rates.logBytes) + "/s"
-  else if (selected === "Maintenance" || selected === "MVCC") value = formatRate(data.maintenance.backlog, isClickHouse(data.engine) ? " jobs" : (isMysqlFamily(data.engine) ? " undo" : " dead"))
+  else if (selected === "Maintenance" || selected === "MVCC") value = isSqlServer(data.engine)
+    ? formatBytes(data.maintenance.backlog) + " log"
+    : formatRate(data.maintenance.backlog, isClickHouse(data.engine) ? " jobs" : (isMysqlFamily(data.engine) ? " undo" : " dead"))
   else value = formatRate(data.rates.work, workSuffix)
   return vertical ? value.replace(/ .*/, "") : value
 }
@@ -560,9 +598,12 @@ function fleetSummary(states) {
     mysqlMaintenance: 0,
     clickhouseWork: 0,
     clickhouseMaintenance: 0,
+    sqlserverWork: 0,
+    sqlserverMaintenance: 0,
     postgresCount: 0,
     mysqlCount: 0,
     clickhouseCount: 0,
+    sqlserverCount: 0,
     severity: "normal"
   }
   for (var i = 0; i < source.length; i++) {
@@ -584,6 +625,10 @@ function fleetSummary(states) {
       summary.clickhouseCount++
       summary.clickhouseWork += finiteNumber(rates.work, rates.transactions)
       summary.clickhouseMaintenance += finiteNumber(maintenance.backlog, 0)
+    } else if (isSqlServer(state.engine)) {
+      summary.sqlserverCount++
+      summary.sqlserverWork += finiteNumber(rates.work, rates.transactions)
+      summary.sqlserverMaintenance += finiteNumber(maintenance.backlog, 0)
     } else if (isMysqlFamily(state.engine)) {
       summary.mysqlCount++
       summary.mysqlWork += finiteNumber(rates.work, rates.transactions)
@@ -609,9 +654,11 @@ function fleetBarLabel(states, mode, vertical) {
   var prefix = vertical ? "" : fleet.connected + "/" + fleet.total + " · "
   if (mode === "Work" || mode === "Transactions") {
     var workParts = []
-    if (fleet.postgresCount > 0) workParts.push((fleet.mysqlCount + fleet.clickhouseCount > 0 ? "PG " : "") + formatRate(fleet.postgresWork, "t/s"))
-    if (fleet.mysqlCount > 0) workParts.push((fleet.postgresCount + fleet.clickhouseCount > 0 ? "MY " : "") + formatRate(fleet.mysqlWork, "q/s"))
-    if (fleet.clickhouseCount > 0) workParts.push((fleet.postgresCount + fleet.mysqlCount > 0 ? "CH " : "") + formatRate(fleet.clickhouseWork, "q/s"))
+    var mixedWork = fleet.postgresCount + fleet.mysqlCount + fleet.clickhouseCount + fleet.sqlserverCount > 1
+    if (fleet.postgresCount > 0) workParts.push((mixedWork ? "PG " : "") + formatRate(fleet.postgresWork, "t/s"))
+    if (fleet.mysqlCount > 0) workParts.push((mixedWork ? "MY " : "") + formatRate(fleet.mysqlWork, "q/s"))
+    if (fleet.clickhouseCount > 0) workParts.push((mixedWork ? "CH " : "") + formatRate(fleet.clickhouseWork, "q/s"))
+    if (fleet.sqlserverCount > 0) workParts.push((mixedWork ? "SQL " : "") + formatRate(fleet.sqlserverWork, "b/s"))
     return prefix + workParts.join(" · ")
   }
   if (mode === "Activity") return prefix + fleet.active + " active"
@@ -620,9 +667,11 @@ function fleetBarLabel(states, mode, vertical) {
   if (mode === "Log" || mode === "WAL") return prefix + formatBytes(fleet.logBytes) + "/s"
   if (mode === "Maintenance" || mode === "MVCC") {
     var maintenanceParts = []
-    if (fleet.postgresCount > 0) maintenanceParts.push((fleet.mysqlCount + fleet.clickhouseCount > 0 ? "PG " : "") + formatRate(fleet.postgresMaintenance, " dead"))
-    if (fleet.mysqlCount > 0) maintenanceParts.push((fleet.postgresCount + fleet.clickhouseCount > 0 ? "MY " : "") + formatRate(fleet.mysqlMaintenance, " undo"))
-    if (fleet.clickhouseCount > 0) maintenanceParts.push((fleet.postgresCount + fleet.mysqlCount > 0 ? "CH " : "") + formatRate(fleet.clickhouseMaintenance, " jobs"))
+    var mixedMaintenance = fleet.postgresCount + fleet.mysqlCount + fleet.clickhouseCount + fleet.sqlserverCount > 1
+    if (fleet.postgresCount > 0) maintenanceParts.push((mixedMaintenance ? "PG " : "") + formatRate(fleet.postgresMaintenance, " dead"))
+    if (fleet.mysqlCount > 0) maintenanceParts.push((mixedMaintenance ? "MY " : "") + formatRate(fleet.mysqlMaintenance, " undo"))
+    if (fleet.clickhouseCount > 0) maintenanceParts.push((mixedMaintenance ? "CH " : "") + formatRate(fleet.clickhouseMaintenance, " jobs"))
+    if (fleet.sqlserverCount > 0) maintenanceParts.push((mixedMaintenance ? "SQL " : "") + formatBytes(fleet.sqlserverMaintenance) + " log")
     return prefix + maintenanceParts.join(" · ")
   }
   if (fleet.blocked > 0) return prefix + fleet.blocked + " block"
@@ -646,6 +695,7 @@ if (typeof module !== "undefined" && module.exports) {
     engineFamily: engineFamily,
     isMysqlFamily: isMysqlFamily,
     isClickHouse: isClickHouse,
+    isSqlServer: isSqlServer,
     internalTunnelPort: internalTunnelPort,
     engineLabel: engineLabel,
     engineShortLabel: engineShortLabel,

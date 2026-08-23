@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ryrobes.hazel",
   "name": "Hazel",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "Ryan Robitaille",
   "license": "MIT",
   "description": "A quiet, read-only multi-database instrument for the Omarchy bar.",
@@ -12,9 +12,9 @@
   },
   "barWidget": {
     "displayName": "Hazel",
-    "description": "PostgreSQL, MySQL, MariaDB, Percona, and ClickHouse activity, pressure, log flow, and engine-native maintenance across every enabled profile.",
+    "description": "PostgreSQL, MySQL, MariaDB, Percona, ClickHouse, and SQL Server activity, pressure, log flow, and engine-native maintenance across every enabled profile.",
     "category": "System",
-    "aliases": ["postgres", "postgresql", "mysql", "mariadb", "percona", "clickhouse", "database", "db-monitor"],
+    "aliases": ["postgres", "postgresql", "mysql", "mariadb", "percona", "clickhouse", "sqlserver", "mssql", "database", "db-monitor"],
     "allowMultiple": true,
     "defaultSection": "right",
     "defaults": {

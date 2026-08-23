@@ -37,6 +37,8 @@ BorderSurface {
             return "Percona";
         if (value === "clickhouse")
             return "ClickHouse";
+        if (value === "sqlserver")
+            return "SQL Server";
         return value === "mysql" ? "MySQL" : "PostgreSQL";
     }
 
@@ -83,7 +85,7 @@ BorderSurface {
         var source = values || {};
         profileId = String(source.id || "");
         var engine = String(source.engine || "postgresql");
-        if (engine !== "mysql" && engine !== "mariadb" && engine !== "percona" && engine !== "clickhouse")
+        if (engine !== "mysql" && engine !== "mariadb" && engine !== "percona" && engine !== "clickhouse" && engine !== "sqlserver")
             engine = "postgresql";
         var defaults = engineDefaults(engine);
         engineField.value = engine;
@@ -204,7 +206,7 @@ BorderSurface {
                 Layout.preferredWidth: Style.space(164)
                 showLabel: false
                 value: "postgresql"
-                options: [{ "value": "postgresql", "label": "PostgreSQL" }, { "value": "mysql", "label": "MySQL 8+" }, { "value": "mariadb", "label": "MariaDB" }, { "value": "percona", "label": "Percona 8+" }, { "value": "clickhouse", "label": "ClickHouse" }]
+                options: [{ "value": "postgresql", "label": "PostgreSQL" }, { "value": "mysql", "label": "MySQL 8+" }, { "value": "mariadb", "label": "MariaDB" }, { "value": "percona", "label": "Percona 8+" }, { "value": "clickhouse", "label": "ClickHouse" }, { "value": "sqlserver", "label": "SQL Server" }]
                 foreground: root.foreground
                 onChanged: function(next) { root.applyEngine(next); }
             }

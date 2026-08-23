@@ -12,6 +12,7 @@ BorderSurface {
     property color urgent: Color.urgent
     property color muted: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.56)
     property string fontFamily: Style.font.family
+    property string titleText: "LOCK FLOW"
     readonly property var visibleEdges: firstRows(edges, 3)
 
     function firstRows(source, limit) {
@@ -49,7 +50,7 @@ BorderSurface {
             Layout.fillWidth: true
 
             Text {
-                text: "LOCK FLOW"
+                text: root.titleText
                 color: root.muted
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
