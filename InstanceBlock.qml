@@ -430,6 +430,7 @@ BorderSurface {
             autovacuumHistory: root.snapshot.histories.autovacuumCount
             runningHistory: root.snapshot.histories.active
             capacityHistory: root.snapshot.histories.capacityUsed
+            historyBucketMs: Number(root.snapshot.historyBucketMs || 30000)
             maintenanceLabel: root.snapshot.maintenance.backlogLabel
             maintenanceKind: root.snapshot.maintenance.kind
             windowHours: root.historyHours

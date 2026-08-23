@@ -36,6 +36,7 @@ Item {
     property var autovacuumHistory: []
     property var runningHistory: []
     property var capacityHistory: []
+    property int historyBucketMs: 30000
     property string maintenanceLabel: "DEAD TUPLES"
     property string maintenanceKind: "vacuum"
     property int windowHours: 6
@@ -169,7 +170,8 @@ Item {
         if (stats.count < 2 || stats.lastAt <= stats.firstAt)
             return windowHours + "H LENS  ·  WARMING UP";
         var observed = Model.formatDuration((stats.lastAt - stats.firstAt) / 1000);
-        return windowHours + "H LENS  ·  " + observed + " OBSERVED  ·  5s BUCKETS";
+        var bucketSeconds = Math.max(1, Math.round(historyBucketMs / 1000));
+        return windowHours + "H LENS  ·  " + observed + " OBSERVED  ·  " + bucketSeconds + "s BUCKETS";
     }
 
     function lockContext() {

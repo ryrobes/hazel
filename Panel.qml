@@ -575,7 +575,8 @@ Panel {
 
     Timer {
         id: instancePublishTimer
-        interval: 0
+        // Collapse near-simultaneous collector signals into one fleet publish.
+        interval: 75
         repeat: false
         onTriggered: root.publishInstances()
     }
@@ -842,7 +843,9 @@ Panel {
                         rowSpacing: Style.space(9)
 
                         Repeater {
-                            model: instanceRows
+                            // The toolbar needs collector state while closed; the expensive
+                            // chart tree does not. Build cards only while the panel is visible.
+                            model: root.opened && !root.configuring ? instanceRows : null
 
                             delegate: InstanceBlock {
                                 required property int index

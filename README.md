@@ -52,8 +52,12 @@ server is doing real background work.
 
 Summary collection for every enabled profile continues while the panel is
 closed (every five seconds by default), so reopening Hazel preserves the
-context gathered while it was out of sight. The Pressure Memory view uses
-those per-profile five-second buckets to show the
+context gathered while it was out of sight. Collection is staggered across
+profiles, active-query details run on a slower cadence than summaries, and the
+chart tree does not exist while the panel is closed. The Pressure Memory view
+rolls samples into bounded 30-second buckets, preserving bucket lows and
+high-water marks while avoiding unbounded work in Omarchy's shared shell
+process. It shows the
 current value, p50, p90, and session high-water mark for engine-native work
 flow, lock-wait counts, used connections, and maintenance backlog. Connections are
 shown as an actual used/max count while their rail zooms to the observed range.

@@ -15,6 +15,18 @@ function safeArray(value) {
   return Array.isArray(value) ? value : []
 }
 
+function stablePhase(key, span) {
+  var width = Math.max(0, Math.floor(finiteNumber(span, 0)))
+  if (width <= 0) return 0
+  var value = String(key || "hazel")
+  var hash = 2166136261
+  for (var index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0) % width
+}
+
 function engineFamily(engine) {
   var value = String(engine || "postgresql").toLowerCase()
   if (value === "mysql" || value === "mariadb" || value === "percona") return "mysql"
@@ -118,6 +130,7 @@ function emptyState() {
     stale: false,
     sequence: 0,
     collectedAtMs: 0,
+    historyBucketMs: 30000,
     identity: {},
     capabilities: {},
     connections: {
@@ -242,15 +255,26 @@ function appendHistory(history, timestamp, value, policy) {
   var cutoff = timestamp - windowMs
   var start = 0
   while (start < source.length && finiteNumber(source[start].time, 0) < cutoff) start++
-  var next = source.slice(start)
-  var point = { time: timestamp, value: finiteNumber(value, 0) }
+  if (start > 0) source.splice(0, start)
+  var next = source
+  var sample = finiteNumber(value, 0)
+  var point = { time: timestamp, value: sample, low: sample, high: sample, sum: sample, count: 1 }
   var bucket = Math.floor(timestamp / bucketMs)
-  if (next.length > 0 && Math.floor(finiteNumber(next[next.length - 1].time, 0) / bucketMs) === bucket)
-    next[next.length - 1] = point
-  else
+  if (next.length > 0 && Math.floor(finiteNumber(next[next.length - 1].time, 0) / bucketMs) === bucket) {
+    var current = next[next.length - 1]
+    var count = Math.max(1, Math.floor(finiteNumber(current.count, 1)))
+    var sum = finiteNumber(current.sum, finiteNumber(current.value, 0) * count) + sample
+    current.time = timestamp
+    current.count = count + 1
+    current.sum = sum
+    current.value = sum / current.count
+    current.low = Math.min(finiteNumber(current.low, current.value), sample)
+    current.high = Math.max(finiteNumber(current.high, current.value), sample)
+  } else {
     next.push(point)
+  }
 
-  if (next.length > maxPoints) next = next.slice(next.length - maxPoints)
+  if (next.length > maxPoints) next.splice(0, next.length - maxPoints)
   return next
 }
 
@@ -268,15 +292,23 @@ function percentile(sortedValues, probability) {
 function historyStats(history) {
   var points = safeArray(history)
   var values = []
-  for (var i = 0; i < points.length; i++) values.push(finiteNumber(points[i] && points[i].value, 0))
+  var low = Number.POSITIVE_INFINITY
+  var high = Number.NEGATIVE_INFINITY
+  for (var i = 0; i < points.length; i++) {
+    var point = safeObject(points[i])
+    var value = finiteNumber(point.value, 0)
+    values.push(value)
+    low = Math.min(low, finiteNumber(point.low, value))
+    high = Math.max(high, finiteNumber(point.high, value))
+  }
   values.sort(function(a, b) { return a - b })
   return {
     count: values.length,
     p25: percentile(values, 0.25),
     p50: percentile(values, 0.50),
     p90: percentile(values, 0.90),
-    low: values.length > 0 ? values[0] : 0,
-    high: values.length > 0 ? values[values.length - 1] : 0,
+    low: values.length > 0 ? low : 0,
+    high: values.length > 0 ? high : 0,
     firstAt: points.length > 0 ? finiteNumber(points[0].time, 0) : 0,
     lastAt: points.length > 0 ? finiteNumber(points[points.length - 1].time, 0) : 0
   }
@@ -375,6 +407,7 @@ function ingestSummary(previousState, payload, historyPolicy) {
   next.engine = String(nextPayload.engine || previous.engine || "postgresql")
   next.sequence = previous.sequence + 1
   next.collectedAtMs = timestamp
+  next.historyBucketMs = policy && typeof policy === "object" ? finiteNumber(policy.bucketMs, 30000) : 0
   next.identity = safeObject(nextPayload.identity)
   next.capabilities = safeObject(nextPayload.capabilities)
   next.connections = Object.assign(next.connections, connections)
@@ -692,6 +725,7 @@ function escapeMarkup(value) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     clamp: clamp,
+    stablePhase: stablePhase,
     engineFamily: engineFamily,
     isMysqlFamily: isMysqlFamily,
     isClickHouse: isClickHouse,

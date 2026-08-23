@@ -52,13 +52,18 @@ Item {
     readonly property int closedRefreshMs: boundedSetting("closedRefreshSec", 5, 2, 60) * 1000
     readonly property int openRefreshMs: boundedSetting("openRefreshSec", 2, 1, 10) * 1000
     readonly property int historyHours: boundedSetting("historyHours", 6, 1, 24)
-    readonly property int historyBucketMs: 5000
+    // Thirty-second rollups are denser than the panel can display while
+    // keeping a full day bounded. Each bucket retains its low and high.
+    readonly property int historyBucketMs: 30000
     readonly property var historyPolicy: ({
         "windowMs": historyHours * 60 * 60 * 1000,
         "bucketMs": historyBucketMs,
         "maxPoints": Math.ceil(historyHours * 60 * 60 * 1000 / historyBucketMs) + 2
     })
     readonly property bool queriesReady: summarySql.trim() !== "" && detailsSql.trim() !== ""
+    readonly property int startupPhaseMs: Model.stablePhase(profileId, Math.min(4000, Math.max(500, closedRefreshMs - 500)))
+    readonly property int summaryPhaseMs: Model.stablePhase(profileId + "|summary", panelOpen ? 400 : 900)
+    readonly property int detailsPhaseMs: Model.stablePhase(profileId + "|details", 700)
     readonly property string connectionKey: [profileId, engineName, connectionConfigured, hostName, port, databaseName, userName, sslMode, rememberPassword, sshEnabled, sshHost, sshPort, sshUser, sshIdentityFile, sshLocalPort].join("|")
 
     function stringSetting(name, fallback) {
@@ -433,10 +438,10 @@ Item {
     }
 
     function refresh() {
-        requestSummary();
+        enqueueRequest("summary");
         if (panelOpen)
             enqueueRequest("details");
-
+        deferredRefreshTimer.restart();
     }
 
     function consumeLine(line) {
@@ -529,12 +534,15 @@ Item {
             reconnectTimer.stop();
             retryTimer.stop();
             summaryTimer.stop();
+            detailsTimer.stop();
+            deferredRefreshTimer.stop();
             pendingKind = "";
             clearQueuedRequests();
             processReady = false;
             collectorTransactionsSinceSummary = 0;
             oneShotSucceeded = false;
             collectorTimedOut = false;
+            state = Model.emptyState();
             if (psqlProc.running)
                 psqlProc.running = false;
             tunnelWarmup.stop();
@@ -569,8 +577,9 @@ Item {
 
     }
     onPanelOpenChanged: {
-        summaryTimer.restart();
-        if (panelOpen)
+        if (active)
+            summaryTimer.restart();
+        if (panelOpen && active)
             refresh();
     }
     Component.onCompleted: {
@@ -757,7 +766,7 @@ Item {
     Timer {
         id: credentialReloadTimer
 
-        interval: 350
+        interval: 100 + root.startupPhaseMs
         repeat: false
         onTriggered: {
             if (root.active)
@@ -782,10 +791,31 @@ Item {
     Timer {
         id: summaryTimer
 
-        interval: root.panelOpen ? root.openRefreshMs : root.closedRefreshMs
+        interval: (root.panelOpen ? root.openRefreshMs : root.closedRefreshMs) + root.summaryPhaseMs
         repeat: true
         running: root.active
-        onTriggered: root.panelOpen ? root.refresh() : root.requestSummary()
+        onTriggered: root.requestSummary()
+    }
+
+    Timer {
+        id: detailsTimer
+
+        interval: Math.max(4000, root.openRefreshMs * 2) + root.detailsPhaseMs
+        repeat: true
+        running: root.active && root.panelOpen
+        onTriggered: root.requestDetails()
+    }
+
+    Timer {
+        id: deferredRefreshTimer
+
+        interval: root.detailsPhaseMs
+        repeat: false
+        onTriggered: {
+            var next = root.takeQueuedRequest("summary");
+            if (next !== "")
+                root.request(next);
+        }
     }
 
     Timer {

@@ -367,6 +367,31 @@ test("history statistics expose p25, p50, p90, and the high-water mark", () => {
   assert.equal(stats.high, 10)
 })
 
+test("compacted history preserves spikes without retaining every raw sample", () => {
+  let state = Model.emptyState()
+  const policy = { windowMs: 24 * 60 * 60_000, bucketMs: 30_000, maxPoints: 2882 }
+  for (let i = 0; i < 17_280; i++)
+    state = Model.ingestSummary(state, summary(1_000_000 + i * 5_000, { xactCommit: 100 + i }), policy)
+
+  assert.ok(state.histories.work.length <= 2882)
+  assert.equal(state.historyBucketMs, 30_000)
+
+  let spike = Model.emptyState()
+  spike = Model.ingestSummary(spike, summary(1_000_000, { xactCommit: 0 }), policy)
+  spike = Model.ingestSummary(spike, summary(1_005_000, { xactCommit: 5 }), policy)
+  spike = Model.ingestSummary(spike, summary(1_010_000, { xactCommit: 505 }), policy)
+  const stats = Model.historyStats(spike.histories.work)
+  assert.equal(spike.histories.work.length, 1)
+  assert.ok(stats.high >= 100)
+})
+
+test("collector phases are deterministic and bounded", () => {
+  assert.equal(Model.stablePhase("profile-a", 900), Model.stablePhase("profile-a", 900))
+  assert.ok(Model.stablePhase("profile-a", 900) >= 0)
+  assert.ok(Model.stablePhase("profile-a", 900) < 900)
+  assert.equal(Model.stablePhase("profile-a", 0), 0)
+})
+
 test("history rates distinguish accumulating and clearing dead tuples", () => {
   const growing = [
     { time: 0, value: 1000 },
@@ -467,9 +492,20 @@ test("enabled named profiles own collectors, theme tone, and optional SSH transp
 test("closed panels continue summary collection without fetching query details", () => {
   const root = path.join(__dirname, "..")
   const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
-  assert.match(controller, /interval:\s*root\.panelOpen\s*\?\s*root\.openRefreshMs\s*:\s*root\.closedRefreshMs/)
-  assert.match(controller, /onTriggered:\s*root\.panelOpen\s*\?\s*root\.refresh\(\)\s*:\s*root\.requestSummary\(\)/)
+  assert.match(controller, /interval:\s*\(root\.panelOpen \? root\.openRefreshMs : root\.closedRefreshMs\) \+ root\.summaryPhaseMs/)
+  assert.match(controller, /id:\s*summaryTimer[\s\S]*?onTriggered:\s*root\.requestSummary\(\)/)
   assert.match(controller, /function requestDetails\(\)\s*\{\s*if \(panelOpen\)/)
+})
+
+test("closed panels do not keep the chart tree or disabled history alive", () => {
+  const root = path.join(__dirname, "..")
+  const panel = fs.readFileSync(path.join(root, "Panel.qml"), "utf8")
+  const controller = fs.readFileSync(path.join(root, "HazelController.qml"), "utf8")
+  assert.match(panel, /model:\s*root\.opened && !root\.configuring \? instanceRows : null/)
+  assert.match(controller, /onActiveChanged:[\s\S]*?state = Model\.emptyState\(\)/)
+  assert.match(controller, /readonly property int historyBucketMs: 30000/)
+  assert.match(controller, /id: detailsTimer[\s\S]*?Math\.max\(4000, root\.openRefreshMs \* 2\)/)
+  assert.match(controller, /Model\.stablePhase\(profileId \+ "\|summary"/)
 })
 
 test("profile expansion is exclusive, additive, and card-driven", () => {
@@ -506,7 +542,7 @@ test("refreshes update stable instance roles in place and use a restrained wash"
   const block = fs.readFileSync(path.join(root, "InstanceBlock.qml"), "utf8")
 
   assert.match(panel, /id:\s*instanceRows\s*\n\s*dynamicRoles:\s*true/)
-  assert.match(panel, /model:\s*instanceRows/)
+  assert.match(panel, /model:\s*root\.opened && !root\.configuring \? instanceRows : null/)
   assert.match(panel, /instanceRows\.setProperty\(updated, "stateData", next\.state\)/)
   assert.doesNotMatch(panel, /model:\s*root\.instances/)
   assert.match(block, /id:\s*refreshWash/)
