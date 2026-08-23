@@ -770,10 +770,16 @@ test("shipped SQL is SELECT-only and masks active query literals", () => {
   assert.match(details, /'queryText'/)
   assert.match(details, /AND state = 'active'/)
   assert.match(details, /regexp_replace\(query/)
+  assert.match(details, /to_jsonb\(pg_stat_activity\).*query_id/)
   assert.ok(details.includes("E'\\\\$\\\\$.*\\\\$\\\\$'"))
   assert.doesNotMatch(details, /indexes_processed|indexes_total|num_dead_item_ids/)
   assert.match(controller, /environment\.PGAPPNAME = "hazel-monitor"/)
   assert.match(summarySql, /application_name IS DISTINCT FROM 'hazel-monitor'/)
+  assert.match(summarySql, /server_version_num.*120000/)
+  assert.match(summarySql, /server_version_num.*140000/)
+  assert.match(summarySql, /hazel_legacy_wal/)
+  assert.match(summarySql, /^BEGIN READ ONLY;/)
+  assert.match(summarySql, /COMMIT;\s*$/)
   assert.match(details, /application_name IS DISTINCT FROM 'hazel-monitor'/)
 
   for (const file of ["summary.sql", "details.sql"]) {

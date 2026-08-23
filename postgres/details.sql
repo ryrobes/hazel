@@ -8,7 +8,7 @@ WITH activity_rows AS (
     'state', state,
     'waitType', wait_event_type,
     'waitEvent', wait_event,
-    'queryId', query_id,
+    'queryId', nullif(to_jsonb(pg_stat_activity)->>'query_id', '')::bigint,
     'queryVerb', upper(coalesce(substring(ltrim(query) FROM '^([[:alpha:]]+)'), 'QUERY')),
     'queryText', left(
       regexp_replace(

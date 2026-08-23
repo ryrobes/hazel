@@ -1,3 +1,28 @@
+BEGIN READ ONLY;
+
+SELECT
+  CASE
+    WHEN current_setting('server_version_num')::integer >= 120000
+      THEN 'pg_catalog.pg_stat_progress_vacuum'
+    ELSE $hazel$(SELECT NULL::integer AS pid WHERE false) AS hazel_legacy_vacuum_progress$hazel$
+  END AS hazel_vacuum_progress_source,
+  CASE
+    WHEN current_setting('server_version_num')::integer >= 140000
+      THEN 'pg_catalog.pg_stat_wal'
+    ELSE $hazel$(
+      SELECT
+        CASE
+          WHEN pg_is_in_recovery()
+            THEN pg_wal_lsn_diff(pg_last_wal_replay_lsn(), '0/0')
+          ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), '0/0')
+        END::numeric AS wal_bytes,
+        NULL::bigint AS wal_records,
+        NULL::bigint AS wal_fpi,
+        NULL::timestamp with time zone AS stats_reset
+    ) AS hazel_legacy_wal$hazel$
+  END AS hazel_wal_source
+\gset
+
 WITH identity AS (
   SELECT
     current_database() AS database_name,
@@ -82,10 +107,10 @@ WITH identity AS (
   FROM pg_stat_user_tables
 ), vacuum_progress AS (
   SELECT count(*)::integer AS workers
-  FROM pg_stat_progress_vacuum
+  FROM :hazel_vacuum_progress_source
 ), wal_stats AS (
   SELECT wal_bytes, wal_records, wal_fpi, stats_reset
-  FROM pg_stat_wal
+  FROM :hazel_wal_source
 ), replication AS (
   SELECT
     count(*)::integer AS replica_count,
@@ -176,3 +201,5 @@ SELECT jsonb_build_object(
   )
 )
 FROM identity, activity, database_stats, relation_stats, vacuum_progress, wal_stats, replication;
+
+COMMIT;
