@@ -73,6 +73,8 @@ jq -e --arg engine "$variant" '
   .identity.family == "mysql" and
   (.identity.version | type == "string") and
   (.connections.max > 0) and
+  (.connections.oldestQuerySeconds | type == "number") and
+  (.connections.oldestLockWaitSeconds | type == "number") and
   (.counters.workTotal >= 0) and
   (.counters.logBytes >= 0) and
   .counters.statsReset == null and
@@ -108,17 +110,19 @@ done
 locked_summary=$(docker exec -i -e MYSQL_PWD=hazel-dev-only "$container" "$client" -uhazel -Dhazel --batch --raw --skip-column-names --silent < "$repo_dir/$sql_dir/summary.sql")
 details=$(docker exec -i -e MYSQL_PWD=hazel-dev-only "$container" "$client" -uhazel -Dhazel --batch --raw --skip-column-names --silent < "$repo_dir/$sql_dir/details.sql")
 
-jq -e '.connections.blocked >= 1 and .connections.lockWaiting >= 1 and .connections.oldestLockWaitSeconds >= 0' <<<"$locked_summary" >/dev/null
+jq -e '.connections.blocked >= 1 and .connections.lockWaiting >= 1 and (.connections.oldestLockWaitSeconds | type == "number") and .connections.oldestLockWaitSeconds >= 0' <<<"$locked_summary" >/dev/null
 jq -e '
   .schema == 1 and
   .kind == "details" and
   (.activity | length >= 2) and
   (all(.activity[]; .state != "sleep")) and
+  (all(.activity[]; .querySeconds | type == "number")) and
   (any(.activity[]; .queryText | contains("accounts"))) and
   (all(.activity[]; (.queryText | contains("1111.11") or contains("2222.22")) | not)) and
   (.relations | length >= 1) and
   (.relations[0].rowsChanged >= 0) and
   (.blocking | length >= 1) and
+  (all(.blocking[]; .blockedSeconds | type == "number")) and
   .blocking[0].waitType == "DATA" and
   (.blocking[0].lockMode | type == "string") and
   .blocking[0].lockTarget == "hazel.accounts" and

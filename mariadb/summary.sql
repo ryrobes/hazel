@@ -21,7 +21,7 @@ WITH status_values AS (
     COUNT(*) AS used,
     COALESCE(SUM(COMMAND <> 'Sleep'), 0) AS active,
     COALESCE(SUM(COMMAND = 'Sleep'), 0) AS idle,
-    COALESCE(MAX(CASE WHEN COMMAND <> 'Sleep' THEN TIME ELSE 0 END), 0) AS oldest_query_seconds
+    CAST(COALESCE(MAX(CASE WHEN COMMAND <> 'Sleep' THEN TIME ELSE 0 END), 0) AS UNSIGNED) AS oldest_query_seconds
   FROM information_schema.PROCESSLIST
   WHERE ID <> CONNECTION_ID()
     AND COMMAND <> 'Daemon'
@@ -50,7 +50,7 @@ WITH status_values AS (
 ), metadata_waits AS (
   SELECT
     COUNT(DISTINCT locks.OWNER_THREAD_ID) AS waiting,
-    COALESCE(MAX(threads.PROCESSLIST_TIME), 0) AS oldest_wait_seconds
+    CAST(COALESCE(MAX(threads.PROCESSLIST_TIME), 0) AS UNSIGNED) AS oldest_wait_seconds
   FROM performance_schema.metadata_locks AS locks
   LEFT JOIN performance_schema.threads AS threads
     ON threads.THREAD_ID = locks.OWNER_THREAD_ID

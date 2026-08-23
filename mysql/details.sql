@@ -20,7 +20,7 @@ WITH activity_rows AS (
       ),
       320
     ),
-    'querySeconds', TIME,
+    'querySeconds', CAST(TIME AS UNSIGNED),
     'xactSeconds', COALESCE((
       SELECT TIMESTAMPDIFF(SECOND, trx_started, NOW())
       FROM information_schema.innodb_trx
@@ -62,7 +62,7 @@ WITH activity_rows AS (
     'lockType', waiting_lock.LOCK_TYPE,
     'lockMode', waiting_lock.LOCK_MODE,
     'lockTarget', CONCAT_WS('.', waiting_lock.OBJECT_SCHEMA, waiting_lock.OBJECT_NAME),
-    'blockedSeconds', COALESCE(waiting_process.TIME, 0)
+    'blockedSeconds', CAST(COALESCE(waiting_process.TIME, 0) AS UNSIGNED)
   ) AS item
   FROM performance_schema.data_lock_waits AS waits
   JOIN performance_schema.data_locks AS waiting_lock
@@ -89,7 +89,7 @@ WITH activity_rows AS (
     'lockType', waiting_lock.LOCK_TYPE,
     'lockMode', waiting_lock.LOCK_DURATION,
     'lockTarget', CONCAT_WS('.', waiting_lock.OBJECT_SCHEMA, waiting_lock.OBJECT_NAME),
-    'blockedSeconds', COALESCE(waiting_process.TIME, 0)
+    'blockedSeconds', CAST(COALESCE(waiting_process.TIME, 0) AS UNSIGNED)
   ) AS item
   FROM performance_schema.metadata_locks AS waiting_lock
   JOIN performance_schema.metadata_locks AS blocking_lock

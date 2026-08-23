@@ -1,13 +1,17 @@
 import QtQuick
 import Quickshell.Io
 
-// SplitParser's normal newline mode retains an unterminated line without a
-// limit. Reading raw chunks keeps its internal buffer empty; this component
-// owns the only cross-chunk buffer and enforces a hard line-length ceiling.
+// Raw-chunk mode owns the cross-chunk buffer and enforces a hard ceiling.
+// For Hazel's structurally bounded JSON rows, newline mode can instead keep
+// raw UTF-8 bytes intact until Quickshell decodes the complete line.
 SplitParser {
     id: root
 
     property int maximumLineLength: 1024 * 1024
+    // Database result rows are structurally bounded by Hazel's SELECTs. Let
+    // Quickshell retain their raw bytes through the newline so UTF-8 code
+    // points cannot be split across arbitrary process read chunks.
+    property bool preserveUtf8Lines: false
     readonly property int bufferedLength: pending.length
     property string pending: ""
     property bool discardingOversizedLine: false
@@ -15,7 +19,7 @@ SplitParser {
     signal line(string value)
     signal lineRejected(int limit)
 
-    splitMarker: ""
+    splitMarker: preserveUtf8Lines ? "\n" : ""
 
     function reset() {
         pending = "";
@@ -66,6 +70,9 @@ SplitParser {
     }
 
     onRead: function(data) {
-        root.appendChunk(data);
+        if (root.preserveUtf8Lines)
+            root.appendSegment(String(data || ""), true);
+        else
+            root.appendChunk(data);
     }
 }

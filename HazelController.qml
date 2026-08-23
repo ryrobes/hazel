@@ -13,7 +13,8 @@ Item {
     property string errorText: ""
     property bool processReady: false
     property string pendingKind: ""
-    property string queuedKind: ""
+    property bool summaryQueued: false
+    property bool detailsQueued: false
     property string summarySql: ""
     property string detailsSql: ""
     property string sessionPassword: ""
@@ -28,6 +29,7 @@ Item {
     property int credentialGeneration: 0
     property int secretLookupGeneration: -1
     property bool secretLookupStopping: false
+    property bool collectorTimedOut: false
     readonly property bool connectionConfigured: booleanSetting("configured", false)
     readonly property string engineName: normalizedEngine(stringSetting("engine", "postgresql"))
     readonly property string engineFamily: Model.engineFamily(engineName)
@@ -88,6 +90,30 @@ Item {
             return value.toLowerCase() === "true";
 
         return value === true;
+    }
+
+    function enqueueRequest(kind) {
+        if (kind === "details")
+            detailsQueued = true;
+        else
+            summaryQueued = true;
+    }
+
+    function takeQueuedRequest(fallback) {
+        if (summaryQueued) {
+            summaryQueued = false;
+            return "summary";
+        }
+        if (detailsQueued) {
+            detailsQueued = false;
+            return "details";
+        }
+        return String(fallback || "");
+    }
+
+    function clearQueuedRequests() {
+        summaryQueued = false;
+        detailsQueued = false;
     }
 
     function secretAttributes() {
@@ -317,8 +343,7 @@ Item {
         errorText = "";
         processReady = false;
         if (engineFamily === "clickhouse") {
-            var next = queuedKind || "summary";
-            queuedKind = "";
+            var next = takeQueuedRequest("summary");
             request(next);
             return;
         }
@@ -333,22 +358,22 @@ Item {
 
         if (engineFamily === "clickhouse") {
             if (!credentialsReady) {
-                queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
+                enqueueRequest(kind);
                 return;
             }
             if (sshEnabled && !tunnelReady) {
-                queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
+                enqueueRequest(kind);
                 ensureTunnel();
                 return;
             }
             if (psqlProc.running || pendingKind !== "") {
-                if (kind === "details" || queuedKind === "")
-                    queuedKind = kind;
+                enqueueRequest(kind);
                 return;
             }
             var clickhouseSql = kind === "details" ? detailsSql : summarySql;
             pendingKind = kind;
             oneShotSucceeded = false;
+            collectorTimedOut = false;
             errorText = "";
             queryWatchdog.restart();
             psqlProc.environment = databaseEnvironment();
@@ -358,18 +383,17 @@ Item {
         }
 
         if (!psqlProc.running || !processReady) {
-            queuedKind = kind === "details" ? "details" : (queuedKind || "summary");
+            enqueueRequest(kind);
             ensureProcess();
             return ;
         }
         if (pendingKind !== "") {
-            if (kind === "details" || queuedKind === "")
-                queuedKind = kind;
-
+            enqueueRequest(kind);
             return ;
         }
         var sql = kind === "details" ? detailsSql : summarySql;
         pendingKind = kind;
+        collectorTimedOut = false;
         queryWatchdog.restart();
         psqlProc.write(sql + "\n");
     }
@@ -387,7 +411,7 @@ Item {
     function refresh() {
         requestSummary();
         if (panelOpen)
-            queuedKind = "details";
+            enqueueRequest("details");
 
     }
 
@@ -414,14 +438,14 @@ Item {
         } else {
             return ;
         }
+        collectorTimedOut = false;
         pendingKind = "";
         queryWatchdog.stop();
         if (engineFamily === "clickhouse") {
             oneShotSucceeded = true;
             return;
         }
-        var next = queuedKind;
-        queuedKind = "";
+        var next = takeQueuedRequest("");
         if (next !== "")
             Qt.callLater(function() {
             root.request(next);
@@ -450,7 +474,8 @@ Item {
         reconnectTimer.stop();
         retryTimer.stop();
         pendingKind = "";
-        queuedKind = "summary";
+        clearQueuedRequests();
+        enqueueRequest("summary");
         processReady = false;
         collectorTransactionsSinceSummary = 0;
         oneShotSucceeded = false;
@@ -481,10 +506,11 @@ Item {
             retryTimer.stop();
             summaryTimer.stop();
             pendingKind = "";
-            queuedKind = "";
+            clearQueuedRequests();
             processReady = false;
             collectorTransactionsSinceSummary = 0;
             oneShotSucceeded = false;
+            collectorTimedOut = false;
             if (psqlProc.running)
                 psqlProc.running = false;
             tunnelWarmup.stop();
@@ -499,6 +525,8 @@ Item {
             invalidateCredentialLookup();
             state = Model.emptyState();
             oneShotSucceeded = false;
+            collectorTimedOut = false;
+            clearQueuedRequests();
             if (psqlProc.running)
                 psqlProc.running = false;
             tunnelWarmup.stop();
@@ -553,8 +581,7 @@ Item {
             root.processReady = true;
             if (root.engineFamily === "clickhouse")
                 return;
-            var next = root.queuedKind || "summary";
-            root.queuedKind = "";
+            var next = root.takeQueuedRequest("summary");
             Qt.callLater(function() {
                 root.request(next);
             });
@@ -567,20 +594,23 @@ Item {
             queryWatchdog.stop();
             if (root.engineFamily === "clickhouse" && root.oneShotSucceeded) {
                 root.oneShotSucceeded = false;
-                var next = root.queuedKind;
-                root.queuedKind = "";
+                var next = root.takeQueuedRequest("");
                 if (root.active && next !== "")
                     Qt.callLater(function() { root.request(next); });
                 return;
             }
             root.collectorTransactionsSinceSummary = 0;
             if (root.active) {
-                root.state = Model.markDisconnected(root.state);
+                if (root.collectorTimedOut && root.state.sequence > 0)
+                    root.state = Model.markStale(root.state, "Snapshot delayed");
+                else
+                    root.state = Model.markDisconnected(root.state);
                 if (exitCode === 127)
                     root.errorText = root.missingClientError();
                 else if (root.errorText === "")
                     root.errorText = root.engineLabel() + " connection closed";
 
+                root.collectorTimedOut = false;
                 retryTimer.restart();
             }
         }
@@ -588,6 +618,7 @@ Item {
         stdout: BoundedLineReader {
             id: databaseStdout
             maximumLineLength: 1024 * 1024
+            preserveUtf8Lines: true
             onLine: function(line) {
                 root.consumeLine(line);
             }
@@ -764,6 +795,8 @@ Item {
         repeat: false
         onTriggered: {
             root.errorText = root.engineLabel() + " snapshot timed out";
+            root.collectorTimedOut = true;
+            root.enqueueRequest("summary");
             root.pendingKind = "";
             root.processReady = false;
             if (psqlProc.running)

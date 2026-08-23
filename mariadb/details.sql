@@ -20,7 +20,7 @@ WITH activity_rows AS (
       ),
       320
     ),
-    'querySeconds', TIME,
+    'querySeconds', CAST(TIME AS UNSIGNED),
     'xactSeconds', COALESCE((
       SELECT TIMESTAMPDIFF(SECOND, trx_started, NOW())
       FROM information_schema.INNODB_TRX
@@ -93,7 +93,7 @@ WITH activity_rows AS (
     'lockType', waiting_lock.lock_type,
     'lockMode', waiting_lock.lock_mode,
     'lockTarget', REPLACE(waiting_lock.lock_table, '`', ''),
-    'blockedSeconds', COALESCE(TIMESTAMPDIFF(SECOND, waiting_trx.trx_wait_started, NOW()), waiting_process.TIME, 0)
+    'blockedSeconds', CAST(COALESCE(TIMESTAMPDIFF(SECOND, waiting_trx.trx_wait_started, NOW()), waiting_process.TIME, 0) AS UNSIGNED)
   ) AS item
   FROM information_schema.INNODB_LOCK_WAITS AS waits
   JOIN information_schema.INNODB_LOCKS AS waiting_lock
@@ -121,7 +121,7 @@ WITH activity_rows AS (
     'lockType', waiting_lock.LOCK_TYPE,
     'lockMode', waiting_lock.LOCK_DURATION,
     'lockTarget', CONCAT_WS('.', waiting_lock.OBJECT_SCHEMA, waiting_lock.OBJECT_NAME),
-    'blockedSeconds', COALESCE(waiting_thread.PROCESSLIST_TIME, 0)
+    'blockedSeconds', CAST(COALESCE(waiting_thread.PROCESSLIST_TIME, 0) AS UNSIGNED)
   ) AS item
   FROM performance_schema.metadata_locks AS waiting_lock
   JOIN performance_schema.metadata_locks AS blocking_lock

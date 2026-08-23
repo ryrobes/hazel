@@ -202,7 +202,10 @@ qmllint -I /usr/share/omarchy/shell \
   BackgroundWork.qml HazelMark.qml HazelWordmark.qml LiveQueries.qml LockFlow.qml InstanceBlock.qml
 node --test tests/model.test.js
 tests/bounded-line-reader.test.sh
+tests/utf8-line-reader.test.sh
 tests/credential-race.test.sh
+tests/controller-queue.test.sh
+tests/timeout-state.test.sh
 tests/postgres-sql.test.sh
 tests/postgres16-sql.test.sh
 tests/mysql-sql.test.sh

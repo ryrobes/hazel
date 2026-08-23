@@ -254,6 +254,19 @@ test("fleet toolbar reports paused and unavailable sets explicitly", () => {
   assert.match(Model.fleetBarLabel([healthy, down], "Adaptive", false), /1\/2 · 1 down/)
 })
 
+test("a delayed snapshot keeps a previously sampled profile online but stale", () => {
+  const sampled = Model.ingestSummary(Model.emptyState(), summary(1000, {}), 120)
+  const stale = Model.markStale(sampled, "Snapshot delayed")
+  assert.equal(stale.connected, true)
+  assert.equal(stale.stale, true)
+  assert.equal(stale.severity, "warning")
+  assert.equal(stale.statusLabel, "Snapshot delayed")
+
+  const neverSampled = Model.markStale(Model.emptyState(), "Snapshot delayed")
+  assert.equal(neverSampled.connected, false)
+  assert.equal(neverSampled.severity, "critical")
+})
+
 test("session histories obey their configured cap", () => {
   let state = Model.emptyState()
   for (let i = 0; i < 40; i++)
@@ -526,6 +539,10 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(controller, /function clickhouseCommand\(sql\)/)
   assert.match(controller, /--query", String\(sql \|\| ""\)/)
   assert.match(controller, /engineFamily === "clickhouse" && root\.oneShotSucceeded/)
+  assert.match(controller, /function enqueueRequest\(kind\)/)
+  assert.match(controller, /function takeQueuedRequest\(fallback\)/)
+  assert.match(controller, /if \(summaryQueued\)[\s\S]*?return "summary"/)
+  assert.match(controller, /Model\.markStale\(root\.state, "Snapshot delayed"\)/)
   assert.match(controller, /if \(sshEnabled && !tunnelReady\)[\s\S]*?ensureTunnel\(\)/)
   assert.match(controller, /MAX_EXECUTION_TIME=5000/)
   assert.match(controller, /max_statement_time=5/)
@@ -538,6 +555,8 @@ test("profiles select a real engine adapter while sharing one normalized UI cont
   assert.match(background, /NumberAnimation on phase/)
   assert.match(background, /running: root\.visible && root\.jobs\.length > 0/)
   assert.match(background, /parts at rest/)
+  assert.match(setup, /engineFamily\(engine\) !== "postgresql" && value === "verify-ca"/)
+  assert.match(setup, /"Verify certificate"/)
   assert.deepEqual(manifest.barWidget.schema.find((item) => item.key === "toolbarMetric").options,
     ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"])
 })
@@ -559,7 +578,8 @@ test("collector secrets stay out of argv and database streams are bounded", () =
   assert.match(controller, /function invalidateCredentialLookup\(\)/)
   assert.equal((controller.match(/stdout:\s*BoundedLineReader/g) || []).length, 1)
   assert.equal((controller.match(/stderr:\s*BoundedLineReader/g) || []).length, 2)
-  assert.match(reader, /splitMarker:\s*""/)
+  assert.match(reader, /splitMarker:\s*preserveUtf8Lines \? "\\n" : ""/)
+  assert.match(controller, /preserveUtf8Lines:\s*true/)
   assert.match(reader, /pending\.length \+ segment\.length > maximumLineLength/)
   assert.match(reader, /discardingOversizedLine = true/)
   assert.match(reader, /readonly property int bufferedLength: pending\.length/)

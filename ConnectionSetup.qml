@@ -44,11 +44,31 @@ BorderSurface {
         return Model.engineDefaults(engine);
     }
 
+    function normalizedTlsMode(engine, mode) {
+        var value = String(mode || "prefer");
+        if (engineFamily(engine) !== "postgresql" && value === "verify-ca")
+            return "verify-full";
+        return value;
+    }
+
+    function tlsOptions(engine) {
+        var options = [
+            { "value": "disable", "label": "TLS disabled" },
+            { "value": "prefer", "label": "TLS preferred" },
+            { "value": "require", "label": "TLS required" }
+        ];
+        if (engineFamily(engine) === "postgresql")
+            options.push({ "value": "verify-ca", "label": "Verify CA" });
+        options.push({ "value": "verify-full", "label": engineFamily(engine) === "postgresql" ? "Verify host" : "Verify certificate" });
+        return options;
+    }
+
     function applyEngine(next) {
         var previous = engineField.value;
         engineField.value = next;
         if (previous === next)
             return;
+        sslField.value = normalizedTlsMode(next, sslField.value);
         var oldDefaults = engineDefaults(previous);
         var nextDefaults = engineDefaults(next);
         if (Number(portField.text) === oldDefaults.port)
@@ -73,7 +93,7 @@ BorderSurface {
         portField.text = String(source.port || defaults.port);
         databaseField.text = String(source.database || defaults.database);
         userField.text = String(source.user || defaults.user);
-        sslField.value = String(source.sslMode || "prefer");
+        sslField.value = normalizedTlsMode(engine, source.sslMode);
         passwordField.text = "";
         rememberToggle.checked = source.rememberPassword === undefined ? true : source.rememberPassword === true;
         sshToggle.checked = source.sshEnabled === true;
@@ -281,7 +301,7 @@ BorderSurface {
                 Layout.preferredWidth: Style.space(150)
                 showLabel: false
                 value: "prefer"
-                options: [{ "value": "disable", "label": "TLS disabled" }, { "value": "prefer", "label": "TLS preferred" }, { "value": "require", "label": "TLS required" }, { "value": "verify-ca", "label": "Verify CA" }, { "value": "verify-full", "label": "Verify host" }]
+                options: root.tlsOptions(engineField.value)
                 foreground: root.foreground
                 onChanged: function(next) { value = next; }
             }

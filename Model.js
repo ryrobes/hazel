@@ -475,6 +475,18 @@ function markDisconnected(state) {
   return next
 }
 
+function markStale(state, label) {
+  var previous = state || emptyState()
+  if (previous.sequence <= 0) return markDisconnected(previous)
+  var next = {}
+  for (var key in previous) next[key] = previous[key]
+  next.connected = true
+  next.stale = true
+  next.severity = "warning"
+  next.statusLabel = String(label || "Snapshot delayed")
+  return next
+}
+
 function formatRate(value, suffix) {
   var number = finiteNumber(value, 0)
   if (number >= 1000000) return (number / 1000000).toFixed(number >= 10000000 ? 0 : 1) + "M" + suffix
@@ -648,6 +660,7 @@ if (typeof module !== "undefined" && module.exports) {
     historyRate: historyRate,
     historyLastDrop: historyLastDrop,
     markDisconnected: markDisconnected,
+    markStale: markStale,
     formatRate: formatRate,
     formatBytes: formatBytes,
     formatDuration: formatDuration,
