@@ -347,6 +347,27 @@ Item {
         return route;
     }
 
+    function shellQuote(value) {
+        return "'" + String(value || "").replace(/'/g, "'\''") + "'";
+    }
+
+    // Shell restarts can orphan Hazel ssh -L processes. Reclaim only tunnels that
+    // look like ours (ExitOnForwardFailure + this exact local bind), then exec ssh.
+    function tunnelLaunchCommand() {
+        var port = String(sshLocalPort);
+        var ssh = sshCommand();
+        var quoted = [];
+        for (var i = 0; i < ssh.length; i++)
+            quoted.push(shellQuote(ssh[i]));
+        var script = (
+            // [E]xit avoids matching this bash -c line (classic pkill self-match).
+            "pkill -f '[E]xitOnForwardFailure=yes.*-L 127.0.0.1:" + port + ":' >/dev/null 2>&1 || true; "
+            + "sleep 0.2; "
+            + "exec " + quoted.join(" ")
+        );
+        return ["bash", "-c", script];
+    }
+
     function ensureTunnel() {
         if (!active || !connectionConfigured || !sshEnabled || tunnelProc.running)
             return ;
@@ -356,7 +377,7 @@ Item {
         }
         tunnelReady = false;
         tunnelErrorText = "";
-        tunnelProc.command = sshCommand();
+        tunnelProc.command = tunnelLaunchCommand();
         tunnelProc.running = true;
     }
 
@@ -857,6 +878,13 @@ Item {
                 psqlProc.running = false;
 
         }
+    }
+
+    Component.onDestruction: {
+        tunnelWarmup.stop();
+        tunnelReady = false;
+        if (tunnelProc.running)
+            tunnelProc.running = false;
     }
 
 }

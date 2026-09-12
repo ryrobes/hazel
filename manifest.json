@@ -2,11 +2,13 @@
   "schemaVersion": 1,
   "id": "ryrobes.hazel",
   "name": "Hazel",
-  "version": "0.5.0",
+  "version": "0.5.2",
   "author": "Ryan Robitaille",
   "license": "MIT",
   "description": "A quiet, read-only multi-database instrument for the Omarchy bar.",
-  "kinds": ["bar-widget"],
+  "kinds": [
+    "bar-widget"
+  ],
   "entryPoints": {
     "barWidget": "BarWidget.qml"
   },
@@ -14,7 +16,18 @@
     "displayName": "Hazel",
     "description": "PostgreSQL, MySQL, MariaDB, Percona, ClickHouse, and SQL Server activity, pressure, log flow, and engine-native maintenance across every enabled profile.",
     "category": "System",
-    "aliases": ["postgres", "postgresql", "mysql", "mariadb", "percona", "clickhouse", "sqlserver", "mssql", "database", "db-monitor"],
+    "aliases": [
+      "postgres",
+      "postgresql",
+      "mysql",
+      "mariadb",
+      "percona",
+      "clickhouse",
+      "sqlserver",
+      "mssql",
+      "database",
+      "db-monitor"
+    ],
     "allowMultiple": true,
     "defaultSection": "right",
     "defaults": {
@@ -74,7 +87,15 @@
         "key": "toolbarMetric",
         "type": "enum",
         "label": "Toolbar metric",
-        "options": ["Adaptive", "Work", "Activity", "Connections", "Waits", "Log", "Maintenance"],
+        "options": [
+          "Adaptive",
+          "Work",
+          "Activity",
+          "Connections",
+          "Waits",
+          "Log",
+          "Maintenance"
+        ],
         "defaultValue": "Adaptive"
       }
     ]
